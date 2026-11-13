@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jref"
+version = "0.6.0"
+description = "JRef - Journal Reference Manager: local, file-first academic reference manager for LaTeX workflows."
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JC", email = "j.c@outlook.com" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+]
+# Core dependencies: everything needed by the pure-Python `bibmanager.core` package.
+dependencies = [
+    "PyMuPDF>=1.24.3",       # PDF text / XMP extraction (imported as `pymupdf`)
+    "httpx>=0.27",           # Crossref / arXiv / OpenAlex clients
+    "Unidecode>=1.3",        # ASCII normalisation of surnames for citation keys
+]
+
+[project.optional-dependencies]
+# Desktop GUI (Milestones 2-3) and, later, the inbox watcher (Milestone 4). Kept optional so
+# that the core test-suite runs headless without installing Qt. "PySide6-Essentials" is the
+# QtWidgets subset of PySide6 (a full "PySide6" install satisfies it as well).
+gui = [
+    "PySide6-Essentials>=6.8",
+    "watchdog>=4.0",
+]
+dev = [
+    "pytest>=8.2",
+    "bibtexparser>=2.0.0b7",  # tests validate the generated .bib files with it
+    "pypdf>=4.0",             # tests of the PDF reader used where PyMuPDF does not exist (Android)
+]
+# Phone interface (bibmanager/mobile). Runs on a PC too (python main.py); the APK is built with buildozer.
+mobile = [
+    "kivy>=2.3",
+    "pypdf>=4.0",
+]
+
+[project.gui-scripts]
+jref = "bibmanager.gui.app:main"
+jbibmanager = "bibmanager.gui.app:main"  # 0.5 name, kept for existing shortcuts
+bibmanager = "bibmanager.gui.app:main"  # pre-0.5 name
+
+[tool.setuptools.packages.find]
+include = ["bibmanager*"]
+
+[tool.setuptools.package-data]
+"bibmanager.gui" = ["assets/*.png"]
+"bibmanager.mobile" = ["*.kv", "assets/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+filterwarnings = [
+    "error::DeprecationWarning:bibmanager.*",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"bibmanager/gui/theme.py" = ["E501"]  # long stylesheet lines
+"tests/test_import.py" = ["E501"]  # verbatim Mendeley BibTeX samples

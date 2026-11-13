@@ -1,0 +1,940 @@
+#:kivy 2.1.0
+#:import dp kivy.metrics.dp
+#:import sp kivy.metrics.sp
+#:set NAVY (0.086, 0.118, 0.196, 1)
+#:set NAVY2 (0.125, 0.168, 0.266, 1)
+#:set BG (0.957, 0.965, 0.980, 1)
+#:set CARD (1, 1, 1, 1)
+#:set TEXT (0.106, 0.137, 0.200, 1)
+#:set TEXT2 (0.357, 0.400, 0.478, 1)
+#:set TEXT3 (0.560, 0.600, 0.670, 1)
+#:set ACCENT (0.082, 0.560, 0.640, 1)
+#:set GOLD (0.890, 0.635, 0.102, 1)
+#:set DIVIDER (0.890, 0.906, 0.933, 1)
+#:set DANGER (0.769, 0.216, 0.169, 1)
+#:set PRESSED (0.918, 0.937, 0.965, 1)
+
+# ----------------------------------------------------------------------------- building blocks
+<Icon>:
+    source: app.img(self.name)
+    size_hint: None, None
+    size: dp(24), dp(24)
+    fit_mode: 'contain'
+    mipmap: True
+
+<IconButton>:
+    size_hint: None, None
+    size: dp(48), dp(48)
+    canvas.before:
+        Color:
+            rgba: (0.5, 0.6, 0.7, 0.28) if self.state == 'down' else (0, 0, 0, 0)
+        Ellipse:
+            pos: self.center_x - dp(21), self.center_y - dp(21)
+            size: dp(42), dp(42)
+    Icon:
+        name: root.icon
+        color: root.tint
+
+<Btn>:
+    font_size: sp(15)
+    bold: True
+    size_hint_y: None
+    height: dp(46)
+    color: (1, 1, 1, 1) if self.filled else self.tone
+    opacity: 0.45 if self.disabled else 1
+    disabled_color: self.color
+    canvas.before:
+        Color:
+            rgba: (self.tone if self.filled else CARD) if self.state == 'normal' else ((self.tone[0] * 0.85, self.tone[1] * 0.85, self.tone[2] * 0.85, 1) if self.filled else PRESSED)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(10)]
+        Color:
+            rgba: (0, 0, 0, 0) if self.filled else self.tone
+        Line:
+            rounded_rectangle: self.x, self.y, self.width, self.height, dp(10)
+            width: 1.1
+
+<Fab>:
+    size_hint: None, None
+    size: dp(58), dp(58)
+    canvas.before:
+        Color:
+            rgba: 0, 0, 0, 0.16
+        Ellipse:
+            pos: self.x - dp(1), self.y - dp(4)
+            size: self.width + dp(2), self.height + dp(3)
+        Color:
+            rgba: (0.07, 0.48, 0.55, 1) if self.state == 'down' else ACCENT
+        Ellipse:
+            pos: self.pos
+            size: self.size
+    Icon:
+        name: 'plus'
+        size: dp(28), dp(28)
+
+<Wrap@Label>:
+    color: TEXT
+    font_size: sp(15)
+    size_hint_y: None
+    text_size: self.width, None
+    height: self.texture_size[1]
+    halign: 'left'
+    valign: 'top'
+
+<SectionTitle@Label>:
+    color: TEXT3
+    font_size: sp(12.5)
+    bold: True
+    size_hint_y: None
+    height: dp(22)
+    text_size: self.size
+    halign: 'left'
+    valign: 'bottom'
+
+<Field@TextInput>:
+    multiline: False
+    font_size: sp(15.5)
+    size_hint_y: None
+    height: dp(46)
+    padding: dp(12), (self.height - self.line_height) / 2
+    background_normal: ''
+    background_active: ''
+    background_color: 0, 0, 0, 0
+    foreground_color: TEXT
+    hint_text_color: TEXT3
+    cursor_color: ACCENT
+    selection_color: 0.082, 0.560, 0.640, 0.3
+    write_tab: False
+    canvas.before:
+        Color:
+            rgba: CARD
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(9)]
+        Color:
+            rgba: ACCENT if self.focus else DIVIDER
+        Line:
+            rounded_rectangle: self.x, self.y, self.width, self.height, dp(9)
+            width: 1.2 if self.focus else 1
+        # TextInput draws its text with the colour left active here: restore the text colour.
+        Color:
+            rgba: self.foreground_color if self.text else self.hint_text_color
+
+<AppBar@BoxLayout>:
+    size_hint_y: None
+    height: dp(56)
+    padding: dp(4), 0
+    spacing: dp(2)
+    canvas.before:
+        Color:
+            rgba: NAVY
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+<BarTitle@Label>:
+    font_size: sp(18.5)
+    bold: True
+    color: 1, 1, 1, 1
+    text_size: self.size
+    halign: 'left'
+    valign: 'middle'
+    shorten: True
+    shorten_from: 'right'
+
+<Card@BoxLayout>:
+    orientation: 'vertical'
+    size_hint_y: None
+    height: self.minimum_height
+    padding: dp(14), dp(12)
+    spacing: dp(6)
+    canvas.before:
+        Color:
+            rgba: CARD
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+
+# ----------------------------------------------------------------------------- list rows
+<PaperRow>:
+    size_hint_y: None
+    height: dp(86)
+    padding: dp(16), dp(9), dp(6), dp(9)
+    spacing: dp(8)
+    canvas.before:
+        Color:
+            rgba: PRESSED if self.state == 'down' else CARD
+        Rectangle:
+            pos: self.pos
+            size: self.size
+        Color:
+            rgba: DIVIDER
+        Rectangle:
+            pos: self.x + dp(16), self.y
+            size: self.width - dp(16), 1
+        Color:
+            rgba: ACCENT if root.unread else (0, 0, 0, 0)
+        Ellipse:
+            pos: self.x + dp(5), self.top - dp(21)
+            size: dp(7), dp(7)
+    BoxLayout:
+        orientation: 'vertical'
+        spacing: dp(2)
+        Label:
+            text: root.title_fit
+            bold: root.unread
+            color: TEXT
+            font_size: sp(15.5)
+            text_size: self.width, self.height
+            halign: 'left'
+            valign: 'middle'
+            max_lines: 2
+            line_height: 1.05
+        Label:
+            text: root.sub
+            color: TEXT2
+            font_size: sp(13)
+            size_hint_y: None
+            height: dp(20)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+            shorten: True
+            shorten_from: 'right'
+    BoxLayout:
+        orientation: 'vertical'
+        size_hint_x: None
+        width: dp(40)
+        IconButton:
+            icon: 'star' if root.star else 'star_outline'
+            tint: GOLD if root.star else (0.78, 0.81, 0.86, 1)
+            size: dp(40), dp(38)
+            on_release: app.toggle_favorite(root.paper_id)
+        AnchorLayout:
+            Icon:
+                name: 'pdf'
+                size: dp(19), dp(19)
+                color: (0, 0, 0, 0) if root.pdf == 0 else ((0.80, 0.25, 0.22, 1) if root.pdf == 1 else (0.78, 0.81, 0.86, 1))
+
+<DrawerItem>:
+    size_hint_y: None
+    height: dp(46)
+    padding: dp(16) + root.indent * dp(18), 0, dp(16), 0
+    spacing: dp(14)
+    canvas.before:
+        Color:
+            rgba: (0.082, 0.560, 0.640, 0.13) if root.selected else (PRESSED if self.state == 'down' else (0, 0, 0, 0))
+        RoundedRectangle:
+            pos: self.x + dp(8), self.y + dp(2)
+            size: self.width - dp(16), self.height - dp(4)
+            radius: [dp(9)]
+    AnchorLayout:
+        size_hint_x: None
+        width: dp(24)
+        Icon:
+            name: root.icon
+            size: dp(22), dp(22)
+            color: ACCENT if root.selected else TEXT2
+    Label:
+        text: root.text
+        color: TEXT
+        bold: root.selected
+        font_size: sp(15)
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+        shorten: True
+        shorten_from: 'right'
+    Label:
+        text: root.count
+        color: TEXT3
+        font_size: sp(13)
+        size_hint_x: None
+        width: self.texture_size[0]
+
+<BrowserRow>:
+    size_hint_y: None
+    height: dp(52)
+    padding: dp(16), 0
+    spacing: dp(14)
+    canvas.before:
+        Color:
+            rgba: PRESSED if self.state == 'down' else CARD
+        Rectangle:
+            pos: self.pos
+            size: self.size
+        Color:
+            rgba: DIVIDER
+        Rectangle:
+            pos: self.x + dp(54), self.y
+            size: self.width - dp(54), 1
+    AnchorLayout:
+        size_hint_x: None
+        width: dp(24)
+        Icon:
+            name: root.icon
+            color: (0.80, 0.25, 0.22, 1) if root.icon == 'pdf' else TEXT2
+    Label:
+        text: root.text
+        color: TEXT
+        font_size: sp(15)
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+        shorten: True
+        shorten_from: 'center'
+    Label:
+        text: root.detail
+        color: TEXT3
+        font_size: sp(12.5)
+        size_hint_x: None
+        width: self.texture_size[0]
+
+<SheetItem>:
+    size_hint_y: None
+    height: dp(52)
+    padding: dp(20), 0
+    spacing: dp(18)
+    canvas.before:
+        Color:
+            rgba: PRESSED if self.state == 'down' else (0, 0, 0, 0)
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    AnchorLayout:
+        size_hint_x: None
+        width: dp(24)
+        Icon:
+            name: root.icon
+            color: DANGER if root.danger else (ACCENT if root.checked else TEXT2)
+    Label:
+        text: root.text
+        color: DANGER if root.danger else TEXT
+        font_size: sp(15.5)
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+        shorten: True
+        shorten_from: 'right'
+
+<Sheet>:
+    size_hint: 1, None
+    height: min(box.minimum_height, self.max_height)
+    pos_hint: {'x': 0, 'y': 0}
+    background: ''
+    background_color: 0, 0, 0, 0
+    overlay_color: 0, 0, 0, 0.45
+    ScrollView:
+        do_scroll_x: False
+        bar_width: 0
+        canvas.before:
+            Color:
+                rgba: CARD
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(18), dp(18), 0, 0]
+        BoxLayout:
+            id: box
+            orientation: 'vertical'
+            size_hint_y: None
+            height: self.minimum_height
+            padding: 0, dp(8), 0, dp(14)
+
+<Dialog>:
+    size_hint: 0.9, None
+    height: box.minimum_height
+    pos_hint: {'center_x': 0.5, 'top': 0.84}
+    background: ''
+    background_color: 0, 0, 0, 0
+    overlay_color: 0, 0, 0, 0.45
+    BoxLayout:
+        id: box
+        orientation: 'vertical'
+        size_hint_y: None
+        height: self.minimum_height
+        padding: dp(20), dp(18), dp(20), dp(16)
+        spacing: dp(12)
+        canvas.before:
+            Color:
+                rgba: CARD
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(16)]
+
+<Drawer>:
+    size_hint: 0.84, 1
+    pos_hint: {'x': 0, 'y': 0}
+    background: ''
+    background_color: 0, 0, 0, 0
+    overlay_color: 0, 0, 0, 0.45
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: CARD
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        BoxLayout:
+            size_hint_y: None
+            height: dp(112)
+            padding: dp(18), dp(18)
+            spacing: dp(14)
+            canvas.before:
+                Color:
+                    rgba: NAVY
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+            Image:
+                source: app.asset('icon.png')
+                size_hint: None, None
+                size: dp(60), dp(60)
+                pos_hint: {'center_y': 0.5}
+                mipmap: True
+            BoxLayout:
+                orientation: 'vertical'
+                padding: 0, dp(8)
+                Label:
+                    text: 'JRef'
+                    font_size: sp(24)
+                    bold: True
+                    color: 1, 1, 1, 1
+                    text_size: self.size
+                    halign: 'left'
+                    valign: 'bottom'
+                Label:
+                    text: 'Journal Reference Manager'
+                    font_size: sp(13)
+                    color: 0.68, 0.75, 0.86, 1
+                    text_size: self.size
+                    halign: 'left'
+                    valign: 'top'
+        ScrollView:
+            do_scroll_x: False
+            bar_width: dp(3)
+            BoxLayout:
+                id: nav
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                padding: 0, dp(8)
+
+# ----------------------------------------------------------------------------- screens
+<SetupScreen>:
+    name: 'setup'
+    canvas.before:
+        Color:
+            rgba: NAVY
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    ScrollView:
+        do_scroll_x: False
+        BoxLayout:
+            orientation: 'vertical'
+            size_hint_y: None
+            height: max(self.minimum_height, root.height)
+            padding: dp(26), dp(30), dp(26), dp(24)
+            spacing: dp(14)
+            Image:
+                source: app.asset('logo.png')
+                size_hint_y: None
+                height: dp(168)
+                mipmap: True
+            Label:
+                text: 'Your library on this phone'
+                font_size: sp(21)
+                bold: True
+                color: 1, 1, 1, 1
+                size_hint_y: None
+                height: dp(34)
+            Wrap:
+                text: 'JRef works on the folder that your sync app (Dropsync, FolderSync, Syncthing, Qsync ...) keeps identical with the PC: the library folder that contains  sync/  and  pdfs/.'
+                color: 0.78, 0.83, 0.91, 1
+                halign: 'center'
+                font_size: sp(14.5)
+            Widget:
+                size_hint_y: None
+                height: dp(6)
+            Card:
+                SectionTitle:
+                    text: 'STEP 1  -  ACCESS TO FILES'
+                Wrap:
+                    text: root.access_text
+                    color: TEXT2
+                    font_size: sp(14)
+                Btn:
+                    text: 'Access granted' if root.access else 'Allow access to all files'
+                    disabled: root.access
+                    on_release: app.request_access()
+            Card:
+                SectionTitle:
+                    text: 'STEP 2  -  LIBRARY FOLDER'
+                Wrap:
+                    text: root.folder_text
+                    color: TEXT2
+                    font_size: sp(14)
+                Btn:
+                    text: 'Choose the folder ...'
+                    filled: not root.folder
+                    on_release: app.browse('folder', root.folder or app.storage_root, app.setup_folder_chosen)
+            Btn:
+                text: 'Open the library'
+                disabled: not (root.folder and root.access)
+                tone: GOLD
+                on_release: app.finish_setup()
+            Widget:
+
+<LibraryScreen>:
+    name: 'library'
+    canvas.before:
+        Color:
+            rgba: BG
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    BoxLayout:
+        orientation: 'vertical'
+        AppBar:
+            IconButton:
+                icon: 'menu'
+                on_release: app.open_drawer()
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(6), dp(7)
+                BarTitle:
+                    text: app.view_title
+                Label:
+                    text: app.count_text
+                    font_size: sp(12.5)
+                    color: 0.68, 0.75, 0.86, 1
+                    size_hint_y: None
+                    height: dp(16)
+                    text_size: self.size
+                    halign: 'left'
+                    valign: 'middle'
+                    shorten: True
+            IconButton:
+                icon: 'sort'
+                on_release: app.choose_sort()
+            IconButton:
+                icon: 'sync'
+                on_release: app.sync_now(manual=True)
+        BoxLayout:
+            size_hint_y: None
+            height: dp(52)
+            padding: dp(14), dp(7), dp(4), dp(7)
+            spacing: dp(8)
+            canvas.before:
+                Color:
+                    rgba: CARD
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+                Color:
+                    rgba: DIVIDER
+                Rectangle:
+                    pos: self.x, self.y
+                    size: self.width, 1
+            AnchorLayout:
+                size_hint_x: None
+                width: dp(24)
+                Icon:
+                    name: 'search'
+                    color: TEXT3
+            TextInput:
+                id: search
+                hint_text: 'Search   (author:  journal:  year:  tag:)'
+                multiline: False
+                font_size: sp(15.5)
+                padding: 0, (self.height - self.line_height) / 2
+                background_normal: ''
+                background_active: ''
+                background_color: 0, 0, 0, 0
+                foreground_color: TEXT
+                hint_text_color: TEXT3
+                cursor_color: ACCENT
+                write_tab: False
+                on_text: app.search_changed(self.text)
+            IconButton:
+                icon: 'close'
+                tint: TEXT3
+                size: dp(40), dp(38)
+                opacity: 1 if search.text else 0
+                disabled: not search.text
+                on_release: search.text = ''
+        BoxLayout:
+            size_hint_y: None
+            height: dp(30) if app.status_text else 0
+            opacity: 1 if app.status_text else 0
+            padding: dp(16), 0
+            canvas.before:
+                Color:
+                    rgba: 0.082, 0.560, 0.640, 0.12
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+            Label:
+                text: app.status_text
+                color: 0.05, 0.40, 0.46, 1
+                font_size: sp(13)
+                text_size: self.size
+                halign: 'left'
+                valign: 'middle'
+                shorten: True
+        FloatLayout:
+            RecycleView:
+                id: papers
+                viewclass: 'PaperRow'
+                bar_width: dp(4)
+                scroll_type: ['bars', 'content']
+                RecycleBoxLayout:
+                    default_size: None, dp(86)
+                    default_size_hint: 1, None
+                    size_hint_y: None
+                    height: self.minimum_height
+                    orientation: 'vertical'
+                    padding: 0, 0, 0, dp(84)
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(40), dp(40)
+                spacing: dp(10)
+                opacity: 1 if app.empty_text else 0
+                Widget:
+                AnchorLayout:
+                    size_hint_y: None
+                    height: dp(64)
+                    Icon:
+                        name: 'unsorted'
+                        size: dp(60), dp(60)
+                        color: 0.78, 0.81, 0.86, 1
+                Wrap:
+                    text: app.empty_text
+                    color: TEXT2
+                    halign: 'center'
+                Widget:
+            Fab:
+                pos: self.parent.right - dp(76), self.parent.y + dp(20)
+                on_release: app.add_menu()
+
+<PaperScreen>:
+    name: 'paper'
+    canvas.before:
+        Color:
+            rgba: BG
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    BoxLayout:
+        orientation: 'vertical'
+        AppBar:
+            IconButton:
+                icon: 'back'
+                on_release: app.go_back()
+            BarTitle:
+                text: root.key
+                font_size: sp(17)
+            IconButton:
+                icon: 'star' if root.star else 'star_outline'
+                tint: GOLD if root.star else (1, 1, 1, 1)
+                on_release: app.toggle_favorite(root.paper_id)
+            IconButton:
+                icon: 'more'
+                on_release: app.paper_menu()
+        ScrollView:
+            id: scroll
+            do_scroll_x: False
+            bar_width: dp(3)
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                padding: dp(12), dp(12), dp(12), dp(24)
+                spacing: dp(10)
+                Card:
+                    spacing: dp(8)
+                    Wrap:
+                        text: root.title
+                        font_size: sp(18.5)
+                        bold: True
+                    Wrap:
+                        text: root.authors
+                        color: TEXT2
+                    Wrap:
+                        text: root.venue
+                        color: ACCENT
+                        font_size: sp(14.5)
+                        height: self.texture_size[1] if self.text else 0
+                    Wrap:
+                        text: root.review_text
+                        color: GOLD
+                        font_size: sp(13.5)
+                        bold: True
+                        height: self.texture_size[1] if self.text else 0
+                    Widget:
+                        size_hint_y: None
+                        height: dp(2)
+                    Btn:
+                        text: root.pdf_text
+                        disabled: root.pdf != 1
+                        on_release: app.open_pdf()
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(44)
+                        spacing: dp(10)
+                        Btn:
+                            text: '\\cite{...}'
+                            filled: False
+                            height: dp(44)
+                            on_release: app.copy_citation()
+                        Btn:
+                            text: 'BibTeX'
+                            filled: False
+                            height: dp(44)
+                            on_release: app.copy_bibtex()
+                        Btn:
+                            text: 'DOI'
+                            filled: False
+                            height: dp(44)
+                            disabled: not root.doi
+                            on_release: app.open_doi()
+                Card:
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(26)
+                        SectionTitle:
+                            text: 'FOLDERS'
+                        IconButton:
+                            icon: 'edit'
+                            tint: ACCENT
+                            size: dp(40), dp(26)
+                            on_release: app.edit_folders()
+                    Wrap:
+                        text: root.folders or 'Not in any folder'
+                        color: TEXT if root.folders else TEXT3
+                Card:
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(26)
+                        SectionTitle:
+                            text: 'TAGS'
+                        IconButton:
+                            icon: 'edit'
+                            tint: ACCENT
+                            size: dp(40), dp(26)
+                            on_release: app.edit_tags()
+                    Wrap:
+                        text: root.tags or 'No tags'
+                        color: TEXT if root.tags else TEXT3
+                Card:
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(26)
+                        SectionTitle:
+                            text: 'NOTES'
+                        IconButton:
+                            icon: 'edit'
+                            tint: ACCENT
+                            size: dp(40), dp(26)
+                            on_release: app.edit_notes()
+                    Wrap:
+                        text: root.notes or 'No notes'
+                        color: TEXT if root.notes else TEXT3
+                Card:
+                    opacity: 1 if root.abstract else 0
+                    height: self.minimum_height if root.abstract else 0
+                    SectionTitle:
+                        text: 'ABSTRACT'
+                    Wrap:
+                        text: root.abstract
+                        font_size: sp(14.5)
+                        line_height: 1.12
+                Card:
+                    SectionTitle:
+                        text: 'DETAILS'
+                    Wrap:
+                        text: root.details
+                        color: TEXT2
+                        font_size: sp(13.5)
+                        line_height: 1.15
+
+<EditScreen>:
+    name: 'edit'
+    canvas.before:
+        Color:
+            rgba: BG
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    BoxLayout:
+        orientation: 'vertical'
+        AppBar:
+            IconButton:
+                icon: 'close'
+                on_release: app.go_back()
+            BarTitle:
+                text: 'Edit details'
+            IconButton:
+                icon: 'check'
+                on_release: app.save_edit()
+        ScrollView:
+            do_scroll_x: False
+            bar_width: dp(3)
+            BoxLayout:
+                id: form
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                padding: dp(16), dp(10), dp(16), dp(320)
+                spacing: dp(2)
+
+<BrowserScreen>:
+    name: 'browser'
+    canvas.before:
+        Color:
+            rgba: BG
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    BoxLayout:
+        orientation: 'vertical'
+        AppBar:
+            IconButton:
+                icon: 'back'
+                on_release: app.go_back()
+            BarTitle:
+                text: root.heading
+            IconButton:
+                icon: 'up'
+                on_release: root.go_up()
+        Label:
+            text: root.path
+            color: TEXT2
+            font_size: sp(13)
+            size_hint_y: None
+            height: dp(34)
+            padding: dp(16), 0
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+            shorten: True
+            shorten_from: 'left'
+        RecycleView:
+            id: entries
+            viewclass: 'BrowserRow'
+            bar_width: dp(4)
+            RecycleBoxLayout:
+                default_size: None, dp(52)
+                default_size_hint: 1, None
+                size_hint_y: None
+                height: self.minimum_height
+                orientation: 'vertical'
+        BoxLayout:
+            size_hint_y: None
+            height: dp(70) if root.mode == 'folder' else 0
+            opacity: 1 if root.mode == 'folder' else 0
+            padding: dp(16), dp(12)
+            canvas.before:
+                Color:
+                    rgba: CARD
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+            Btn:
+                text: root.choose_text
+                disabled: root.mode != 'folder'
+                on_release: root.choose_current()
+
+<SettingsScreen>:
+    name: 'settings'
+    canvas.before:
+        Color:
+            rgba: BG
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    BoxLayout:
+        orientation: 'vertical'
+        AppBar:
+            IconButton:
+                icon: 'back'
+                on_release: app.go_back()
+            BarTitle:
+                text: 'Settings'
+        ScrollView:
+            do_scroll_x: False
+            bar_width: dp(3)
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                padding: dp(12), dp(12), dp(12), dp(24)
+                spacing: dp(10)
+                Card:
+                    SectionTitle:
+                        text: 'LIBRARY FOLDER'
+                    Wrap:
+                        text: root.folder
+                    Wrap:
+                        text: root.library_text
+                        color: TEXT2
+                        font_size: sp(13.5)
+                    Btn:
+                        text: 'Change folder ...'
+                        filled: False
+                        on_release: app.browse('folder', root.folder, app.change_library_folder)
+                Card:
+                    SectionTitle:
+                        text: 'SYNCHRONISATION'
+                    Wrap:
+                        text: root.sync_text
+                        color: TEXT2
+                        font_size: sp(13.5)
+                        line_height: 1.15
+                    Btn:
+                        text: 'Synchronise now'
+                        on_release: app.sync_now(manual=True)
+                    Btn:
+                        text: 'Name of this device:  ' + root.device
+                        filled: False
+                        on_release: app.edit_device_name()
+                Card:
+                    SectionTitle:
+                        text: 'LINKED PDFS'
+                    Wrap:
+                        text: root.links_text
+                        color: TEXT2
+                        font_size: sp(13.5)
+                        line_height: 1.15
+                    BoxLayout:
+                        id: links
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        spacing: dp(8)
+                Card:
+                    SectionTitle:
+                        text: 'ONLINE LOOK-UP'
+                    Wrap:
+                        text: 'Crossref and OpenAlex answer faster when requests carry a contact e-mail.'
+                        color: TEXT2
+                        font_size: sp(13.5)
+                    Btn:
+                        text: root.email or 'Set contact e-mail'
+                        filled: False
+                        on_release: app.edit_email()
+                Card:
+                    SectionTitle:
+                        text: 'ABOUT'
+                    Wrap:
+                        text: root.about
+                        color: TEXT2
+                        font_size: sp(13.5)
+                        line_height: 1.2

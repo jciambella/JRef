@@ -1,0 +1,10 @@
+# Runtime dependencies bundled into the Windows installer (exact pins = reproducible builds).
+# PySide6 6.9.x: Qt >= 6.10 links the Windows system ICU (icuuc.dll). That is fine on Windows 10 1903+,
+# but 6.9 also runs under Wine, which is how the installer is smoke-tested on Linux.
+# PyMuPDF 1.x: PyMuPDF 2.x pulls in onnxruntime/numpy (~80 MB) for layout analysis we do not use.
+PySide6-Essentials==6.9.3
+PyMuPDF==1.28.2
+httpx==0.28.1
+bibtexparser==2.1.0
+Unidecode==1.4.0
+watchdog==6.0.0

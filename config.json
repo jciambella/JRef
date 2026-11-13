@@ -1,0 +1,46 @@
+{
+  "_comment": "JRef configuration. Relative paths are resolved against this file's directory. protected_words are matched case-sensitively, token by token, and wrapped in {...} inside BibTeX titles; acronyms (>=2 capitals, e.g. PINNs, SHM), alphanumeric tokens with capitals (3D, 2D) and Roman numerals are protected automatically and need not be listed.",
+  "library_root": "~/JRefLibrary",
+  "import_mode": "move",
+  "network": {
+    "contact_email": "user@example.com",
+    "timeout_s": 15.0,
+    "openalex_min_title_similarity": 0.85
+  },
+  "bibtex": {
+    "write_master": true,
+    "include_abstract": false
+  },
+  "protected_words": [
+    "Cauchy", "Piola", "Kirchhoff", "Cosserat", "Navier", "Stokes", "Rivlin", "Mooney", "Ogden",
+    "Green", "Hooke", "Hookean", "Lamé", "Lame", "Young", "Poisson", "Saint", "Venant",
+    "Euler", "Eulerian", "Lagrange", "Lagrangian", "Hamilton", "Hamiltonian", "Bernoulli",
+    "Timoshenko", "Love", "Reissner", "Mindlin", "Koiter", "Föppl", "Kármán", "Karman", "Airy",
+    "Truesdell", "Noll", "Coleman", "Gurtin", "Eshelby", "Hill", "Mandel", "Voigt", "Reuss",
+    "Hashin", "Shtrikman", "Mori", "Tanaka", "Eringen", "Toupin", "Aifantis", "Kröner", "Nye",
+    "Neo", "Gent", "Yeoh", "Arruda", "Boyce", "Holzapfel", "Gasser", "Fung", "Treloar", "Flory",
+    "Langevin", "Mullins", "Payne", "Bergström", "Simo", "Miehe", "Ortiz", "Govindjee", "Reese",
+    "Kelvin", "Maxwell", "Zener", "Burgers", "Prony", "Boltzmann", "Williams", "Landel", "Ferry",
+    "Arrhenius", "Biot", "Terzaghi", "Darcy", "Fick", "Fickian", "Onsager", "Clausius", "Duhem",
+    "Gibbs", "Helmholtz", "Ginzburg", "Landau", "Cahn", "Hilliard", "Allen",
+    "Mohr", "Coulomb", "Drucker", "Prager", "Tresca", "Mises", "Hencky", "Bauschinger",
+    "Chaboche", "Armstrong", "Frederick", "Perzyna", "Gurson", "Tvergaard", "Needleman",
+    "Johnson", "Cook", "Hall", "Petch", "Schmid", "Orowan", "Peierls", "Nabarro", "Frank", "Read",
+    "Griffith", "Irwin", "Rice", "Barenblatt", "Dugdale", "Paris", "Westergaard",
+    "Francfort", "Marigo", "Bourdin", "Ambrosio", "Tortorelli", "Hertz", "Winkler", "Pasternak",
+    "Floquet", "Bloch", "Bragg", "Rayleigh", "Lamb", "Stoneley", "Hellinger", "Washizu",
+    "Galerkin", "Petrov", "Ritz", "Newton", "Newtonian", "Raphson", "Newmark", "Hilber", "Hughes",
+    "Crank", "Nicolson", "Runge", "Kutta", "Krylov", "Arnoldi", "Lanczos", "Gauss", "Gaussian",
+    "Seidel", "Jacobi", "Jacobian", "Hessian", "Laplace", "Laplacian", "Fourier", "Hilbert",
+    "Banach", "Sobolev", "Riemann", "Riemannian", "Christoffel", "Levi", "Civita", "Cartesian",
+    "Fréchet", "Gateaux", "Lyapunov", "Dirichlet", "Neumann", "Robin", "Nitsche", "Babuška",
+    "Brezzi", "Lax", "Milgram", "Wendroff", "Courant", "Friedrichs", "Lewy", "Godunov",
+    "Karush", "Kuhn", "Tucker", "Moreau", "Yosida", "Legendre", "Chebyshev", "Hermite",
+    "Kronecker", "Voronoi", "Delaunay", "Bézier", "Padé", "Monte", "Carlo", "Markov", "Markovian",
+    "Bayes", "Bayesian", "Kalman", "Wiener", "Nyquist", "Shannon", "Welch", "Hankel", "Toeplitz",
+    "Vandermonde", "Koopman", "Kolmogorov", "Arnold",
+    "Abaqus", "Ansys", "Comsol", "Nastran", "FEniCS", "FEniCSx", "DOLFINx", "Firedrake", "Gmsh",
+    "ParaView", "PETSc", "Trilinos", "Kokkos", "Eigen", "Python", "Julia", "Fortran", "Matlab",
+    "Mathematica", "PyTorch", "TensorFlow", "Keras", "Adam"
+  ]
+}
