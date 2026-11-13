@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import threading
 import time
@@ -312,6 +313,7 @@ class PaperScreen(Screen):
     notes = StringProperty("")
     abstract = StringProperty("")
     details = StringProperty("")
+    supplements = NumericProperty(0)
 
 
 class EditScreen(Screen):
@@ -903,6 +905,18 @@ class JRefApp(App):
             s.pdf, s.pdf_text = 2, "Linked PDF is not on this device"
         else:
             s.pdf, s.pdf_text = 2, "PDF not synchronised to this device yet"
+        box = s.ids.supplements
+        box.clear_widgets()
+        attachments = self.library.attachments(paper.id) if paper.attachments else []
+        s.supplements = len(attachments)
+        for attachment in attachments:
+            here = self.library.attachment_available(attachment)
+            button = _button(attachment.display_name + ("" if here else "   (not on this device yet)"), filled=False)
+            button.height = dp(42)
+            button.font_size = sp(14)
+            button.disabled = not here
+            button.bind(on_release=lambda _b, a=attachment: self.open_supplement(a))
+            box.add_widget(button)
         s.folders = ",  ".join(c.name for c in self.library.collections_of(paper.id))
         s.tags = paper.tags
         s.notes = paper.notes
@@ -942,6 +956,16 @@ class JRefApp(App):
             self._after_paper_change()
         else:
             self.toast("No application could open the PDF")
+
+    def open_supplement(self, attachment: Any) -> None:
+        if self.library is None:
+            return
+        path = self.library.attachment_path(attachment)
+        mime = "application/pdf" if attachment.is_pdf else (mimetypes.guess_type(path.name)[0] or "*/*")
+        if not path.is_file():
+            self.toast("The file is not on this device")
+        elif not droid.open_file(path, mime):
+            self.toast("No application could open this file")
 
     def copy_citation(self) -> None:
         paper = self.current_paper()

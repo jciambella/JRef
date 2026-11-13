@@ -713,7 +713,7 @@ def test_schema_v1_library_is_migrated_in_place(tmp_path: Path) -> None:
         assert (paper.favorite, paper.is_read, paper.tags, paper.meta.keywords) == (False, False, "", "")
         assert (paper.pdf_linked, paper.pdf_managed, paper.meta.extra_fields) == (False, True, {})
         assert [c.name for c in db.collections_of_paper(7)] == ["Thesis"]  # folder links survive the rebuild
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 4
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
         notnull = {r["name"]: r["notnull"] for r in db.conn.execute("PRAGMA table_info(papers)")}
         assert notnull["sha256"] == 0 and notnull["relative_pdf_path"] == 0
         assert db.conn.execute("PRAGMA foreign_key_check").fetchall() == []

@@ -66,6 +66,9 @@ PAPER_FIELDS = (
 )  # fmt: skip
 _META_COLUMNS = frozenset({"title", "authors_json", "abstract"})  # what the full-text index mirrors
 COLLECTION_FIELDS = ("name", "slug", "parent", "created_at")  # bib_export_path is a path on one device: local
+# Supplementary files: the file identity (path, linked flag, hash, position) is one register, like a paper's PDF.
+ATTACHMENT_FILE_GROUP = ("relative_path", "linked", "sha256", "position")
+ATTACHMENT_FIELDS = ("paper", "label", "created_at", *ATTACHMENT_FILE_GROUP)
 _FILE = "@file"
 _SEGMENT = re.compile(r"^\d{6}\.jsonl$")
 _DEVICE_ID = re.compile(r"^[0-9a-f]{8,32}$")
@@ -275,6 +278,10 @@ class SyncEngine:
     def _register(name: str) -> str:
         return _FILE if name in FILE_GROUP else name
 
+    @staticmethod
+    def _attachment_register(name: str) -> str:
+        return _FILE if name in ATTACHMENT_FILE_GROUP else name
+
     # ------------------------------------------------------------------ current state
     def _paper_states(self) -> dict[str, dict[str, Any]]:
         self.conn.execute("UPDATE papers SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL")
@@ -290,6 +297,13 @@ class SyncEngine:
             "LEFT JOIN collections p ON p.id = c.parent_id ORDER BY c.id"
         )
         return {row["uid"]: {name: row[name] for name in COLLECTION_FIELDS} for row in rows}
+
+    def _attachment_states(self) -> dict[str, dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT a.uid, p.uid AS paper, a.relative_path, a.linked, a.sha256, a.label, a.position, a.created_at "
+            "FROM attachments a JOIN papers p ON p.id = a.paper_id ORDER BY a.id"
+        )
+        return {row["uid"]: {name: row[name] for name in ATTACHMENT_FIELDS} for row in rows}
 
     def _member_pairs(self) -> set[str]:
         rows = self.conn.execute(
@@ -312,7 +326,7 @@ class SyncEngine:
             clocks.extend((key, len(ops) - 1) for key in keys)
 
         with self.db.transaction():
-            shadows: dict[str, dict[str, str]] = {"c": {}, "p": {}, "m": {}}
+            shadows: dict[str, dict[str, str]] = {"c": {}, "p": {}, "m": {}, "a": {}}
             for kind, uid, data in self.conn.execute("SELECT kind, uid, data FROM sync_shadow"):
                 shadows.setdefault(kind, {})[uid] = data
 
@@ -357,6 +371,26 @@ class SyncEngine:
                 if paper_uid in papers and collection_uid in collections:  # else implied by the deletion
                     emit({"k": "m", "p": paper_uid, "c": collection_uid, "on": 0}, f"m:{pair}")
                 after.append(("m", pair, None))
+
+            attachments = self._attachment_states()
+            for uid, state in attachments.items():
+                old_text = shadows["a"].get(uid)
+                if old_text is None:
+                    emit({"k": "a", "u": uid, "new": 1, "f": state}, f"a:{uid}")
+                elif old_text != _dumps(state):
+                    old = json.loads(old_text)
+                    changed = {name: value for name, value in state.items() if old.get(name) != value}
+                    if any(name in ATTACHMENT_FILE_GROUP for name in changed):
+                        changed.update({name: state[name] for name in ATTACHMENT_FILE_GROUP})
+                    emit({"k": "a", "u": uid, "f": changed}, *{f"a:{uid}:{self._attachment_register(n)}" for n in changed})
+                else:
+                    continue
+                after.append(("a", uid, state))
+            for uid in shadows["a"].keys() - attachments.keys():
+                paper_uid = json.loads(shadows["a"][uid]).get("paper")
+                if paper_uid in papers:  # else implied by the deletion of the paper
+                    emit({"k": "a", "u": uid, "del": 1}, f"ad:{uid}")
+                after.append(("a", uid, None))
 
             for uid in shadows["p"].keys() - papers.keys():
                 emit({"k": "p", "u": uid, "del": 1}, f"pd:{uid}")
@@ -449,7 +483,7 @@ class SyncEngine:
                     except ValueError:
                         log.warning("Skipping an unreadable line in %s", segment)
                         continue
-                    if isinstance(op, dict) and isinstance(op.get("t"), str) and op.get("k") in ("p", "c", "m"):
+                    if isinstance(op, dict) and isinstance(op.get("t"), str) and op.get("k") in ("p", "c", "m", "a"):
                         ops.append(op)
                 moved.append((directory.name, segment.name, offset + end))
         ops.sort(key=lambda op: op["t"])
@@ -491,6 +525,8 @@ class SyncEngine:
                 done = self._apply_paper(op, report)
             elif kind == "c":
                 done = self._apply_collection(op, report)
+            elif kind == "a":
+                done = self._apply_attachment(op)
             else:
                 done = self._apply_member(op)
         except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
@@ -763,6 +799,111 @@ class SyncEngine:
         if values:
             self.db.update_collection(int(row["id"]), **values)
         return True
+
+    # -- supplementary files
+    def _apply_attachment(self, op: dict[str, Any]) -> bool:
+        uid, stamp = str(op["u"]), op["t"]
+        if op.get("del"):
+            if self._ts(f"ad:{uid}"):
+                return False
+            self._set_ts(f"ad:{uid}", stamp)
+            self._set_shadow("a", uid, None)
+            # Files are the sync tool's business: the row goes, the file (if managed) is removed by its owner.
+            return self.conn.execute("DELETE FROM attachments WHERE uid = ?", (uid,)).rowcount > 0
+        if self._ts(f"ad:{uid}"):
+            return False
+        fields = {name: value for name, value in (op.get("f") or {}).items() if name in ATTACHMENT_FIELDS}
+        row = self.conn.execute("SELECT * FROM attachments WHERE uid = ?", (uid,)).fetchone()
+        if row is None:
+            if not op.get("new"):
+                return self._wait(uid, op)
+            paper_uid = str(fields.get("paper") or "")
+            if self._ts(f"pd:{paper_uid}"):
+                return False
+            paper = self._paper_row(paper_uid)
+            if paper is None:
+                return self._wait(paper_uid, op)
+            state = {name: fields.get(name) for name in ATTACHMENT_FIELDS}
+            state["linked"] = int(bool(state["linked"]))
+            state["position"] = int(state["position"] or 1)
+            state["label"] = state["label"] or ""
+            self._set_ts(f"a:{uid}", stamp)
+            self._set_shadow("a", uid, state)
+            stored = self._free_attachment_path(state, uid, int(paper["id"]), own_id=None)
+            columns = {name: stored[name] for name in ("relative_path", "linked", "sha256", "label", "position")}
+            if stored.get("created_at"):
+                columns["created_at"] = stored["created_at"]
+            names = ["uid", "paper_id", *columns]
+            self.conn.execute(
+                f"INSERT INTO attachments ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+                [uid, int(paper["id"]), *columns.values()],
+            )
+            return True
+        accepted: dict[str, Any] = {}
+        verdict: dict[str, bool] = {}
+        for name, value in fields.items():
+            if name == "paper":
+                continue  # a supplementary file does not change paper
+            register = self._attachment_register(name)
+            if register not in verdict:
+                verdict[register] = stamp > self._ts(f"a:{uid}:{register}", f"a:{uid}")
+                if verdict[register]:
+                    self._set_ts(f"a:{uid}:{register}", stamp)
+            if verdict[register]:
+                accepted[name] = value
+        if not accepted:
+            return False
+        shadow = self._shadow("a", uid) or {name: row[name] for name in ATTACHMENT_FIELDS if name != "paper"}
+        shadow.update(accepted)
+        self._set_shadow("a", uid, shadow)
+        if "relative_path" in accepted:
+            current = {name: row[name] for name in ATTACHMENT_FILE_GROUP}
+            resolved = self._free_attachment_path({**current, **accepted}, uid, int(row["paper_id"]), own_id=int(row["id"]))
+            accepted = {name: resolved[name] for name in accepted}
+        if "linked" in accepted:
+            accepted["linked"] = int(bool(accepted["linked"]))
+        assignments = ", ".join(f"{name} = ?" for name in accepted)
+        self.conn.execute(f"UPDATE attachments SET {assignments} WHERE id = ?", [*accepted.values(), int(row["id"])])
+        return True
+
+    def _free_attachment_path(
+        self, fields: dict[str, Any], uid: str, paper_id: int, *, own_id: int | None
+    ) -> dict[str, Any]:
+        """Two supplementary files recorded at one managed path (added on two devices before they synchronised):
+        the one with the larger ``uid`` takes the next free number, on every device alike (as for citation keys).
+        Returns the fields to store."""
+        relative = fields.get("relative_path")
+        if not relative or fields.get("linked"):
+            return fields
+        other = self.conn.execute(
+            "SELECT * FROM attachments WHERE relative_path = ? COLLATE NOCASE AND id IS NOT ?", (relative, own_id)
+        ).fetchone()
+        if other is None:
+            return fields
+        library = self.library
+        if other["uid"] > uid:  # the local entry gives way: an ordinary local rename (journaled by the next push)
+            attachment = library.get_attachment(int(other["id"]))
+            paper = library.get_paper(attachment.paper_id)
+            source = library.storage.absolute_path(attachment.relative_path)
+            position, wanted = library._free_supplement_slot(
+                paper, attachment.extension, attachment.position + 1, exclude_id=attachment.id
+            )
+            if source.is_file():
+                try:
+                    library.storage.move_relative(attachment.relative_path, wanted)
+                except OSError as exc:
+                    log.warning("Could not rename %s: %s", attachment.relative_path, exc)
+            self.conn.execute(
+                "UPDATE attachments SET relative_path = ?, position = ? WHERE id = ?", (wanted, position, attachment.id)
+            )
+            return fields
+        # The incoming file gives way here (its own device does the same and renames the file there).
+        paper = library.get_paper(paper_id)
+        extension = relative[relative.rfind(".") :] if "." in relative.rsplit("/", 1)[-1] else ""
+        position, wanted = library._free_supplement_slot(
+            paper, extension, int(fields.get("position") or 1) + 1, exclude_id=own_id
+        )
+        return dict(fields, relative_path=wanted, position=position)
 
     # -- folder membership
     def _apply_member(self, op: dict[str, Any]) -> bool:

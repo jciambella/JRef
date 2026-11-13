@@ -34,6 +34,7 @@ from .config import AppConfig
 from .database import Database
 from .extractor import MetadataResolver, PdfContent, PdfReadError, clean_doi, read_pdf
 from .models import (
+    Attachment,
     Collection,
     Paper,
     PaperMetadata,
@@ -130,6 +131,7 @@ class IngestResult:
     collection_id: int | None = None
     log: list[str] = field(default_factory=list)
     attached_pdf: bool = False  # reference import: a PDF was attached to an entry that had none
+    supplements: int = 0  # reference import: supplementary files attached
 
 
 @dataclass(slots=True)
@@ -164,7 +166,8 @@ class ReferenceCandidate:
     favorite: bool = False
     is_read: bool = False
     missing_files: list[str] = field(default_factory=list)  # recorded attachments that were not found
-    extra_files: list[str] = field(default_factory=list)  # further attachments (only one PDF per entry)
+    extra_files: list[str] = field(default_factory=list)  # further files (attached as supplementary files)
+    extra_attachments: list[AttachmentCandidate] = field(default_factory=list)  # prepared by prepare_reference
     log: list[str] = field(default_factory=list)
 
 
@@ -254,7 +257,11 @@ class Library:
         """Thread-safe duplicate check: opens a private read-only connection."""
         uri = f"{Path(self.db_path).resolve().as_uri()}?mode=ro"
         with sqlite3.connect(uri, uri=True) as conn:
-            return conn.execute("SELECT 1 FROM papers WHERE sha256 = ?", (sha256,)).fetchone() is not None
+            row = conn.execute(
+                "SELECT 1 FROM papers WHERE sha256 = :h UNION ALL SELECT 1 FROM attachments WHERE sha256 = :h LIMIT 1",
+                {"h": sha256},
+            ).fetchone()
+            return row is not None
 
     def unassigned_papers(self) -> list[Paper]:
         return self.db.unassigned_papers()
@@ -356,6 +363,14 @@ class Library:
                     self.db.conn.execute("UPDATE papers SET relative_pdf_path = ? WHERE id = ?", (relative, paper_id))
                 except sqlite3.IntegrityError:  # pragma: no cover - two entries on one file
                     log.warning("Could not make %s relative to the library folder", recorded)
+        for attachment_id, recorded in self.db.conn.execute(
+            "SELECT id, relative_path FROM attachments WHERE linked = 1"
+        ).fetchall():
+            if os.path.isabs(recorded):
+                absolute = os.path.abspath(recorded)
+                if os.path.normcase(absolute).startswith(root + os.sep):
+                    relative = Path(absolute[len(root) + 1 :]).as_posix()
+                    self.db.conn.execute("UPDATE attachments SET relative_path = ? WHERE id = ?", (relative, attachment_id))
 
     def linked_path_value(self, path: Path) -> str:
         """How a linked file is recorded: POSIX path relative to the library root when inside it (portable
@@ -632,6 +647,7 @@ class Library:
             self.db.update_paper(
                 paper.id, meta=meta, citation_key=new_key, needs_review=needs_review, notes=changes.get("notes")
             )
+            self._relocate_supplements(paper.id)
             self._sync_bibs(c.id for c in self.db.collections_of_paper(paper.id))
             return self.get_paper(paper.id)
 
@@ -685,6 +701,7 @@ class Library:
             if moved:
                 self.storage.relocate(new_rel, paper.citation_key, paper.meta.year)
             raise
+        self._relocate_supplements(paper.id)
         self._sync_bibs(c.id for c in self.db.collections_of_paper(paper.id))
         return self.get_paper(paper.id)
 
@@ -731,10 +748,14 @@ class Library:
         """
         paper = self.get_paper(paper_id)
         affected = [c.id for c in self.db.collections_of_paper(paper_id)]
-        self.db.delete_paper(paper_id)
+        supplements = [a.relative_path for a in self.db.attachments_of(paper_id) if not a.linked]
+        self.db.delete_paper(paper_id)  # attachments rows go with it (ON DELETE CASCADE)
         if delete_file and paper.pdf_managed:
             assert paper.relative_pdf_path is not None
             self.storage.delete(paper.relative_pdf_path)
+        if delete_file:
+            for relative in supplements:
+                self.storage.delete(relative)
         self._sync_bibs(affected)
 
     # ================================================================== naming rule
@@ -807,6 +828,7 @@ class Library:
             if stored_rel is not None:
                 self._undo_store(stored_rel, source, mode)
             raise
+        self._relocate_supplements(paper.id)
         self._sync_bibs(c.id for c in self.db.collections_of_paper(paper.id))
         return self.get_paper(paper.id)
 
@@ -817,7 +839,7 @@ class Library:
         if not path.is_file():
             raise FileNotFoundError(path)
         candidate = AttachmentCandidate(path, sha256_file(path))
-        if index_fulltext:
+        if index_fulltext and path.suffix.lower() == ".pdf":
             try:
                 candidate.full_text = read_pdf(path).full_text
             except PdfReadError as exc:
@@ -879,6 +901,7 @@ class Library:
                 self._undo_store(stored_rel, source, mode)
             raise
         if key != paper.citation_key:
+            self._relocate_supplements(paper.id)
             self._sync_bibs(c.id for c in self.db.collections_of_paper(paper.id))
         log.info("Attached %s to %s (%s)", source.name, key, mode)
         return self.get_paper(paper.id)
@@ -896,9 +919,241 @@ class Library:
     def papers_without_pdf(self) -> list[Paper]:
         return [p for p in self.db.list_papers() if not p.has_pdf]
 
+    # ================================================================== supplementary files
+    def attachments(self, paper_id: int) -> list[Attachment]:
+        """Supplementary files of a paper (the main PDF is ``Paper.relative_pdf_path``), in display order."""
+        return self.db.attachments_of(paper_id)
+
+    def get_attachment(self, attachment_id: int) -> Attachment:
+        attachment = self.db.get_attachment(attachment_id)
+        if attachment is None:
+            raise KeyError(f"No supplementary file with id {attachment_id}")
+        return attachment
+
+    def attachment_path(self, attachment: Attachment) -> Path:
+        if attachment.linked:
+            return self.resolve_linked_path(attachment.relative_path)
+        return self.storage.absolute_path(attachment.relative_path)
+
+    def attachment_available(self, attachment: Attachment) -> bool:
+        try:
+            return self.attachment_path(attachment).is_file()
+        except OSError:
+            return False
+
+    @staticmethod
+    def _file_stem(citation_key: str) -> str:
+        """The citation key as a file-name stem (keys imported from other managers may contain ``:`` etc.)."""
+        try:
+            return validate_citation_key(citation_key)
+        except ValueError:
+            return sanitize_citation_key(citation_key)
+
+    def _free_supplement_slot(
+        self, paper: Paper, extension: str, start: int, *, exclude_id: int | None = None, own: Path | None = None
+    ) -> tuple[int, str]:
+        """First position >= ``start`` whose managed path is free in the database and on disk."""
+        stem = self._file_stem(paper.citation_key)
+        position = max(1, start)
+        while True:
+            relative = self.storage.supplement_path_for(stem, paper.meta.year, position, extension)
+            target = self.storage.absolute_path(relative)
+            taken = self.db.attachment_path_taken(relative, exclude_id=exclude_id)
+            if not taken and (not target.exists() or same_file(target, own)):
+                return position, relative
+            position += 1
+
+    def add_supplement(
+        self, paper_id: int, candidate: AttachmentCandidate, *, mode: str | None = None, label: str | None = None
+    ) -> Attachment:
+        """Attach a supplementary file (any type: PDF, spreadsheet, archive, video, ...) to a paper.
+
+        ``mode``: ``"link"`` leaves the file where it is; ``"copy"``/``"move"`` (default: the configured import
+        mode) file it as ``pdfs/<YYYY>/<key>_S<n>.<ext>`` next to the main PDF. ``label`` defaults to the original
+        file name. The same bytes cannot be in the library twice (as a main PDF or a supplementary file).
+        """
+        mode = mode or self.config.import_mode
+        if mode not in FILE_MODES:
+            raise ValueError(f"mode must be one of {FILE_MODES}")
+        paper = self.get_paper(paper_id)
+        other = self.db.get_paper_by_sha256(candidate.sha256)
+        if other is not None:
+            where = "this document" if other.id == paper.id else other.citation_key
+            raise LibraryError(f"{Path(candidate.path).name} is already in the library ({where})")
+        source = Path(candidate.path)
+        existing = self.db.attachments_of(paper.id)
+        start = max((a.position for a in existing), default=0) + 1
+        text = label if label is not None else source.stem
+        stored_rel: str | None = None
+        try:
+            with self.db.transaction():
+                if mode == "link":
+                    position, relative, linked = start, self.linked_path_value(source), True
+                else:
+                    position, relative = self._free_supplement_slot(paper, source.suffix, start)
+                    linked = False
+                attachment_id = self.db.insert_attachment(
+                    paper.id, relative_path=relative, linked=linked, sha256=candidate.sha256, label=text,
+                    position=position,
+                )  # fmt: skip
+                self.db.append_fulltext(paper.id, paper.meta, candidate.full_text)
+                if not linked:
+                    stored_rel = self.storage.store_as(source, relative, mode=mode)
+        except BaseException:
+            if stored_rel is not None:
+                self._undo_store(stored_rel, source, mode)
+            raise
+        log.info("Supplementary file %s attached to %s (%s)", source.name, paper.citation_key, mode)
+        return self.get_attachment(attachment_id)
+
+    def rename_supplement(self, attachment_id: int, label: str) -> Attachment:
+        """Change the label shown for a supplementary file (the file name is not touched)."""
+        self.get_attachment(attachment_id)
+        self.db.update_attachment(attachment_id, label=" ".join(label.split()))
+        return self.get_attachment(attachment_id)
+
+    def remove_supplement(self, attachment_id: int, *, delete_file: bool = True) -> None:
+        """Detach a supplementary file; a managed file is deleted, a linked one is never touched.
+        The full-text entry still contains its text until ``set_fulltext`` rebuilds it."""
+        attachment = self.get_attachment(attachment_id)
+        self.db.delete_attachment(attachment.id)
+        if delete_file and not attachment.linked:
+            self.storage.delete(attachment.relative_path)
+
+    def promote_supplement(self, attachment_id: int) -> Paper:
+        """Make a supplementary PDF the main PDF of its paper; the former main PDF becomes a supplementary file
+        (e.g. when the main PDF is in fact the supplementary information). Managed files swap names."""
+        attachment = self.get_attachment(attachment_id)
+        if not attachment.is_pdf:
+            raise LibraryError("Only a PDF can be the main file of a document")
+        paper = self.get_paper(attachment.paper_id)
+        stem = self._file_stem(paper.citation_key)
+        main_slot = self.storage.relative_path_for(stem, paper.meta.year)
+        supp_path = self.attachment_path(attachment)
+        if not supp_path.is_file():
+            raise LibraryError(f"File not found: {supp_path}")
+        moves: list[tuple[str, str]] = []  # done renames (source, destination), undone on failure
+
+        def move(source: str, destination: str) -> None:
+            self.storage.move_relative(source, destination)
+            moves.append((source, destination))
+
+        try:
+            with self.db.transaction():
+                if not paper.has_pdf:
+                    if attachment.linked:
+                        new_main, new_linked = attachment.relative_path, True
+                    else:
+                        if self.storage.absolute_path(main_slot).exists():
+                            raise LibraryError(f"{main_slot} already exists")
+                        new_main, new_linked = main_slot, False
+                    self.db.update_paper(paper.id, relative_pdf_path=new_main, pdf_linked=new_linked,
+                                         sha256=attachment.sha256)  # fmt: skip
+                    self.db.delete_attachment(attachment.id)
+                    if not attachment.linked:
+                        move(attachment.relative_path, main_slot)
+                else:
+                    assert paper.relative_pdf_path is not None
+                    old_main, old_linked, old_sha = paper.relative_pdf_path, paper.pdf_linked, paper.sha256
+                    new_main = attachment.relative_path if attachment.linked else main_slot
+                    if old_linked:
+                        new_supp = old_main
+                    else:
+                        _pos, new_supp = self._free_supplement_slot(
+                            paper, ".pdf", attachment.position, exclude_id=attachment.id, own=supp_path
+                        )
+                    self.db.update_paper(paper.id, relative_pdf_path=new_main, pdf_linked=attachment.linked,
+                                         sha256=attachment.sha256)  # fmt: skip
+                    self.db.update_attachment(attachment.id, relative_path=new_supp, linked=old_linked,
+                                              sha256=old_sha, label="Former main PDF")  # fmt: skip
+                    # Files last (a failure rolls the rows back): managed main -> its supplementary slot, then the
+                    # managed supplement -> the main slot, through a temporary name when the slots are swapped.
+                    temp = None
+                    if not attachment.linked and not old_linked and new_supp == attachment.relative_path:
+                        temp = f"{attachment.relative_path}.swap"
+                        move(attachment.relative_path, temp)
+                    if not old_linked:
+                        move(old_main, new_supp)
+                    if not attachment.linked:
+                        move(temp or attachment.relative_path, main_slot)
+        except BaseException:
+            for source, destination in reversed(moves):
+                try:
+                    self.storage.move_relative(destination, source)
+                except OSError:  # pragma: no cover - best effort
+                    log.exception("Could not undo the rename %s -> %s", source, destination)
+            raise
+        return self.get_paper(paper.id)
+
+    def _relocate_supplements(self, paper_id: int) -> None:
+        """Rename managed supplementary files after the key or the year of their paper changed (best effort: a
+        file that is missing, e.g. not synchronised to this device yet, keeps its recorded path)."""
+        paper = self.get_paper(paper_id)
+        stem = self._file_stem(paper.citation_key)
+        for attachment in self.db.attachments_of(paper_id):
+            if attachment.linked:
+                continue
+            wanted = self.storage.supplement_path_for(stem, paper.meta.year, attachment.position, attachment.extension)
+            if wanted == attachment.relative_path:
+                continue
+            source = self.storage.absolute_path(attachment.relative_path)
+            if not source.is_file():
+                log.warning("Supplementary file not found, not renamed: %s", source)
+                continue
+            position, wanted = self._free_supplement_slot(
+                paper, attachment.extension, attachment.position, exclude_id=attachment.id, own=source
+            )
+            try:
+                self.storage.move_relative(attachment.relative_path, wanted)
+            except OSError as exc:
+                log.warning("Could not rename %s: %s", attachment.relative_path, exc)
+                continue
+            self.db.update_attachment(attachment.id, relative_path=wanted, position=position)
+
+    def fulltext_sources(self, paper_id: int) -> list[Path]:
+        """Files whose text makes up the paper's full-text entry: the main PDF and the supplementary PDFs."""
+        paper = self.get_paper(paper_id)
+        paths = [p] if (p := self.pdf_path(paper)) is not None and p.is_file() else []
+        paths += [path for a in self.db.attachments_of(paper_id) if a.is_pdf and (path := self.attachment_path(a)).is_file()]
+        return paths
+
+    @staticmethod
+    def read_fulltext(paths: Sequence[Path]) -> str:
+        """Text of several PDFs (thread-safe, no SQLite): for ``set_fulltext`` after a file was removed."""
+        texts = []
+        for path in paths:
+            try:
+                texts.append(read_pdf(path).full_text)
+            except PdfReadError as exc:
+                log.warning("%s", exc)
+        return "\n".join(texts)
+
+    def set_fulltext(self, paper_id: int, text: str) -> None:
+        self.db.index_fulltext(paper_id, self.get_paper(paper_id).meta, text)
+
+    def _attach_extra_files(self, paper: Paper, candidate: ReferenceCandidate, file_mode: str) -> int:
+        """Reference import: the further files of an entry (Mendeley keeps several per entry) become its
+        supplementary files; files already in the library are skipped, so a re-import adds nothing twice."""
+        attached = 0
+        for extra in candidate.extra_attachments:
+            if self.db.get_paper_by_sha256(extra.sha256) is not None or not Path(extra.path).is_file():
+                continue
+            try:
+                self.add_supplement(paper.id, extra, mode=file_mode)
+                attached += 1
+            except (LibraryError, OSError) as exc:
+                candidate.log.append(f"{Path(extra.path).name}: {exc}")
+        return attached
+
     # ================================================================== reference import (Mendeley, .bib)
     def prepare_reference(self, candidate: ReferenceCandidate, *, index_fulltext: bool = True) -> ReferenceCandidate:
-        """Hash and (optionally) extract the full text of the attached PDF. Thread-safe, no SQLite."""
+        """Hash and (optionally) extract the full text of the attached PDF and of the further files (attached as
+        supplementary files). Thread-safe, no SQLite."""
+        for extra in candidate.extra_files:
+            try:
+                candidate.extra_attachments.append(self.prepare_attachment(extra, index_fulltext=index_fulltext))
+            except OSError as exc:
+                candidate.log.append(f"Could not read {extra}: {exc}")
         if candidate.pdf_path is None:
             return candidate
         try:
@@ -984,8 +1239,10 @@ class Library:
                 attached = True
             elif not existing.has_pdf and candidate.missing_files:
                 self._record_missing_files(existing, candidate.missing_files)
+            supplements = self._attach_extra_files(self.get_paper(existing.id), candidate, file_mode)
             result = IngestResult(status, self.get_paper(existing.id), None, candidate.log)
             result.attached_pdf = attached
+            result.supplements = supplements
             return result
 
         meta = replace(candidate.metadata, doi=clean_doi(candidate.metadata.doi))
@@ -1039,8 +1296,11 @@ class Library:
             if stored_rel is not None and pdf is not None:
                 self._undo_store(stored_rel, pdf, file_mode)
             raise
+        supplements = self._attach_extra_files(self.get_paper(paper_id), candidate, file_mode)
         self._sync_bibs(folder_ids)
-        return IngestResult(IngestStatus.IMPORTED, self.get_paper(paper_id), None, candidate.log)
+        result = IngestResult(IngestStatus.IMPORTED, self.get_paper(paper_id), None, candidate.log)
+        result.supplements = supplements
+        return result
 
     # ================================================================== BibTeX sync
     def _write_collection(self, collection: Collection) -> list[Path]:
@@ -1138,6 +1398,12 @@ class Library:
             if not (_WINDOWS_ABSOLUTE.match(recorded) or recorded.startswith("/")):  # relative to the old folder
                 absolute = str(old.joinpath(*recorded.split("/")))
                 self.db.conn.execute("UPDATE papers SET relative_pdf_path = ? WHERE id = ?", (absolute, paper_id))
+        for attachment_id, recorded in self.db.conn.execute(
+            "SELECT id, relative_path FROM attachments WHERE linked = 1"
+        ).fetchall():
+            if not (_WINDOWS_ABSOLUTE.match(recorded) or recorded.startswith("/")):
+                absolute = str(old.joinpath(*recorded.split("/")))
+                self.db.conn.execute("UPDATE attachments SET relative_path = ? WHERE id = ?", (absolute, attachment_id))
         self.close()
         target.mkdir(parents=True, exist_ok=True)
         for name in items:

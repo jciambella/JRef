@@ -65,7 +65,7 @@ recognises the shared library and builds its own database from the journals.
 What the app does: browse All Documents / Recently Added / Recently Read / Favorites / Needs Review /
 My Publications / Unsorted and the folders; search with the desktop syntax (`author:anand journal:solids
 year:2015-2020 tag:review is:unread`); open the PDF in your PDF reader; star, read/unread, tags, notes,
-folders; edit the details (authors or year changes rename key and PDF as on the desktop); update details
+folders; open supplementary files; edit the details (authors or year changes rename key and PDF as on the desktop); update details
 online; copy `\cite{key}` or the BibTeX entry; share a reference; delete.
 
 Adding documents on the phone:

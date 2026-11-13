@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from html import escape
 from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
@@ -15,12 +17,14 @@ from PySide6.QtWidgets import (
     QLayout,
     QLayoutItem,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QTabWidget,
     QTextEdit,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -28,8 +32,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.extractor import PdfOutline
-from ..core.models import Paper
+from ..core.models import Attachment, Paper
 from . import icons
+from .assistant_panel import AssistantPanel
 
 ENTRY_TYPES: tuple[tuple[str, str], ...] = (
     ("article", "Journal Article"),
@@ -225,10 +230,13 @@ class DetailsTab(QStackedWidget):
     openUrlRequested = Signal(str)
     revealFileRequested = Signal()
     markReviewedRequested = Signal()
+    attachmentAction = Signal(str, int)  # "open" | "reveal" | "rename" | "promote" | "remove", attachment id
+    addSupplementsRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._has_pdf = True
+        self._attachment_rows: list[QWidget] = []
         self.setObjectName("details")
         self.empty = QLabel("No document selected")
         self.empty.setObjectName("multiSelection")
@@ -315,6 +323,42 @@ class DetailsTab(QStackedWidget):
             v.addWidget(_label(title, "sectionLabel"))
             v.addWidget(widget)
 
+        files = QWidget()
+        files_row = QHBoxLayout(files)
+        files_row.setContentsMargins(0, 2, 0, 0)
+        files_row.setSpacing(6)
+        self.file_icon = QLabel()
+        files_row.addWidget(self.file_icon)
+        self.file_link = QLabel()
+        self.file_link.setObjectName("linkLabel")
+        self.file_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.file_link.installEventFilter(self)
+        files_row.addWidget(self.file_link, 1)
+        self.reveal_button = QPushButton()
+        self.reveal_button.setObjectName("subtle")
+        self.reveal_button.setToolTip("Show in folder")
+        self.reveal_button.clicked.connect(self.revealFileRequested)
+        files_row.addWidget(self.reveal_button)
+        files_box = QWidget()
+        files_layout = QVBoxLayout(files_box)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        files_layout.setSpacing(2)
+        files_layout.addWidget(files)
+        self.supplements = QWidget()
+        self.supplements_layout = QVBoxLayout(self.supplements)
+        self.supplements_layout.setContentsMargins(0, 0, 0, 0)
+        self.supplements_layout.setSpacing(2)
+        files_layout.addWidget(self.supplements)
+        self.add_supplements = QLabel("<a href='#' style='text-decoration:none'>Add supplementary files...</a>")
+        self.add_supplements.setObjectName("linkLabel")
+        self.add_supplements.setToolTip(
+            "Attach supplementary information, data, videos, ... to this document (or drop the files onto its row)"
+        )
+        self.add_supplements.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_supplements.installEventFilter(self)
+        files_layout.addWidget(self.add_supplements)
+        section("Files", files_box)
+
         self.abstract = InlineTextEdit("abstract", multiline=True, placeholder="Add an abstract (Ctrl+Enter to save)")
         section("Abstract", self.abstract)
         self.tags = InlineTextEdit("tags", placeholder="tag; another tag")
@@ -334,23 +378,6 @@ class DetailsTab(QStackedWidget):
         self.folders_layout = FlowLayout(self.folders)
         self.folders.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         section("Folders", self.folders)
-        files = QWidget()
-        files_row = QHBoxLayout(files)
-        files_row.setContentsMargins(0, 2, 0, 0)
-        files_row.setSpacing(6)
-        self.file_icon = QLabel()
-        files_row.addWidget(self.file_icon)
-        self.file_link = QLabel()
-        self.file_link.setObjectName("linkLabel")
-        self.file_link.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.file_link.installEventFilter(self)
-        files_row.addWidget(self.file_link, 1)
-        self.reveal_button = QPushButton()
-        self.reveal_button.setObjectName("subtle")
-        self.reveal_button.setToolTip("Show in folder")
-        self.reveal_button.clicked.connect(self.revealFileRequested)
-        files_row.addWidget(self.reveal_button)
-        section("File", files)
 
         v.addWidget(_label("Catalog IDs", "sectionLabel"))
         ids = QFormLayout()
@@ -393,7 +420,14 @@ class DetailsTab(QStackedWidget):
         self.empty.setText(text)
         self.setCurrentIndex(0)
 
-    def set_paper(self, paper: Paper, folders: list[str], pdf_name: str) -> None:
+    def set_paper(
+        self,
+        paper: Paper,
+        folders: list[str],
+        pdf_name: str,
+        attachments: Sequence[Attachment] = (),
+        available: dict[int, bool] | None = None,
+    ) -> None:
         m = paper.meta
         self.banner.setVisible(paper.needs_review)
         index = self.type_combo.findData(m.entry_type)
@@ -439,7 +473,60 @@ class DetailsTab(QStackedWidget):
             )
         self.file_icon.setVisible(paper.has_pdf)
         self.reveal_button.setVisible(paper.has_pdf)
+        self.set_attachments(attachments, available)
         self.setCurrentIndex(1)
+
+    def set_attachments(self, attachments: Sequence[Attachment], available: dict[int, bool] | None = None) -> None:
+        """One row per supplementary file: icon, name (click opens it) and a menu of actions."""
+        for row in self._attachment_rows:
+            self.supplements_layout.removeWidget(row)
+            row.deleteLater()
+        self._attachment_rows = []
+        for attachment in attachments:
+            row = QWidget()
+            row.setObjectName("supplementRow")
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            icon = QLabel()
+            icon.setPixmap((icons.pdf_file() if attachment.is_pdf else icons.paperclip()).pixmap(18, 18))
+            layout.addWidget(icon)
+            here = True if available is None else available.get(attachment.id, True)
+            notes = []
+            if attachment.linked:
+                notes.append("linked")
+            if not here:
+                notes.append("not on this device")
+            suffix = f" <span style='opacity:0.65'>({', '.join(notes)})</span>" if notes else ""
+            name = QLabel(f"<a href='#' style='text-decoration:none'>{escape(attachment.display_name)}</a>{suffix}")
+            name.setObjectName("linkLabel")
+            name.setToolTip(f"{attachment.file_name}\n{attachment.relative_path}")
+            name.setCursor(Qt.CursorShape.PointingHandCursor)
+            name.linkActivated.connect(lambda _link, aid=attachment.id: self.attachmentAction.emit("open", aid))
+            layout.addWidget(name, 1)
+            more = QToolButton()
+            more.setObjectName("subtle")
+            more.setText("\u22ef")
+            more.setToolTip("More actions for this file")
+            more.setAutoRaise(True)
+            more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            more.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
+            menu = QMenu(more)
+            for text, action, enabled in (
+                ("Open", "open", here),
+                ("Show in Folder", "reveal", here),
+                ("Rename...", "rename", True),
+                ("Set as Main PDF", "promote", attachment.is_pdf and here),
+                ("Remove...", "remove", True),
+            ):
+                item = menu.addAction(text)
+                item.setEnabled(enabled)
+                item.triggered.connect(lambda _c=False, a=action, aid=attachment.id: self.attachmentAction.emit(a, aid))
+            more.setMenu(menu)
+            layout.addWidget(more)
+            self.supplements_layout.addWidget(row)
+            self._attachment_rows.append(row)
+        self.supplements.setVisible(bool(attachments))
 
     def _set_chips(self, names: list[str]) -> None:
         while (item := self.folders_layout.takeAt(0)) is not None:
@@ -467,6 +554,9 @@ class DetailsTab(QStackedWidget):
         if watched is self.file_link and event.type() == QEvent.Type.MouseButtonRelease:
             (self.openFileRequested if self._has_pdf else self.attachFileRequested).emit()
             return True
+        if watched is getattr(self, "add_supplements", None) and event.type() == QEvent.Type.MouseButtonRelease:
+            self.addSupplementsRequested.emit()
+            return True
         return super().eventFilter(watched, event)
 
 
@@ -480,6 +570,8 @@ class InspectorPanel(QTabWidget):
     openUrlRequested = Signal(str)
     revealFileRequested = Signal()
     markReviewedRequested = Signal()
+    attachmentAction = Signal(str, int)
+    addSupplementsRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -505,6 +597,8 @@ class InspectorPanel(QTabWidget):
         self.addTab(self.details, "Details")
         self.addTab(self.notes, "Notes")
         self.addTab(contents, "Contents")
+        self.assistant = AssistantPanel()
+        self.addTab(self.assistant, "Ask AI")
 
         self.details.fieldEdited.connect(self.fieldEdited)
         self.details.lookupRequested.connect(self.lookupRequested)
@@ -513,6 +607,8 @@ class InspectorPanel(QTabWidget):
         self.details.openUrlRequested.connect(self.openUrlRequested)
         self.details.markReviewedRequested.connect(self.markReviewedRequested)
         self.details.revealFileRequested.connect(self.revealFileRequested)
+        self.details.attachmentAction.connect(self.attachmentAction)
+        self.details.addSupplementsRequested.connect(self.addSupplementsRequested)
 
         self.paper_id: int | None = None
         self._notes_timer = QTimer(self)
@@ -526,6 +622,7 @@ class InspectorPanel(QTabWidget):
 
     def refresh_icons(self) -> None:
         self.details.refresh_icons()
+        self.assistant.refresh_icons()
 
     def clear(self, message: str = "No document selected") -> None:
         self.flush_notes()
@@ -537,14 +634,23 @@ class InspectorPanel(QTabWidget):
         self.notes.setEnabled(False)
         self.contents_label.setText("")
         self.outline.clear()
+        self.assistant.set_paper(None)
 
-    def set_paper(self, paper: Paper, folders: list[str], pdf_name: str) -> None:
+    def set_paper(
+        self,
+        paper: Paper,
+        folders: list[str],
+        pdf_name: str,
+        attachments: Sequence[Attachment] = (),
+        available: dict[int, bool] | None = None,
+    ) -> None:
         if self.paper_id != paper.id:
             self.flush_notes()
             self.outline.clear()
             self.contents_label.setText(f"{pdf_name}\nReading table of contents...")
         self.paper_id = paper.id
-        self.details.set_paper(paper, folders, pdf_name)
+        self.details.set_paper(paper, folders, pdf_name, attachments, available)
+        self.assistant.set_paper(paper)
         self.notes.setEnabled(True)
         if self.notes.toPlainText() != paper.notes and not self.notes.hasFocus():
             self._loading = True

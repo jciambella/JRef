@@ -272,6 +272,7 @@ class MendeleyImportController(QObject):
                 else:
                     self.report.duplicates += 1
                     self.report.attached_to_existing += int(result.attached_pdf)
+                self.report.supplements += result.supplements
                 self.report.missing_pdfs += [f"{cand.key}: {path}" for path in cand.missing_files]
         self._step()
 

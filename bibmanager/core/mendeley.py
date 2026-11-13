@@ -741,6 +741,7 @@ class MendeleyImportReport:
     database_matches: int = 0
     folders: int = 0
     attached_to_existing: int = 0  # re-import: PDFs found for entries that had none
+    supplements: int = 0  # further files of the entries, attached as supplementary files
     cancelled: bool = False
 
 

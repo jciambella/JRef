@@ -104,7 +104,7 @@ def test_layout_mirrors_the_classic_three_pane_reference_manager(window: MainWin
     header = window.table.horizontalHeader()
     visible = [HEADERS[c] for c in Col if not header.isSectionHidden(int(c))]
     assert visible == ["", "", "", "Authors", "Title", "Year", "Published in", "Added"]
-    assert [window.inspector.tabText(i) for i in range(window.inspector.count())] == ["Details", "Notes", "Contents"]
+    assert [window.inspector.tabText(i) for i in range(window.inspector.count())] == ["Details", "Notes", "Contents", "Ask AI"]
     combo = window.filter_pane.combo
     assert [combo.itemText(i) for i in range(combo.count())] == [
         "Filter by Authors", "Filter by Author Keywords", "Filter by My Tags", "Filter by Publications",
@@ -649,7 +649,7 @@ def test_window_title_and_about_use_the_new_name(window: MainWindow, monkeypatch
     shown: list[str] = []
     monkeypatch.setattr(QMessageBox, "exec", lambda box: shown.append(box.windowTitle() + "|" + box.text()) or 0)
     window.show_help()
-    assert shown and shown[0].startswith("About JRef|<h3>JRef 0.6.0</h3><p><b>Journal Reference Manager</b>")
+    assert shown and shown[0].startswith("About JRef|<h3>JRef 0.7.0</h3><p><b>Journal Reference Manager</b>")
     assert "Author: JC" in shown[0] and "j.c@outlook.com" in shown[0]
 
 
@@ -810,3 +810,128 @@ def test_sharing_dialog_moves_the_library_to_the_pdf_folder_and_changes_of_a_pho
     window.close()
     window.deleteLater()
     shared.close()
+
+
+# =========================================================================== supplementary files (v0.7)
+def test_supplementary_files_by_drop_inspector_and_menu(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path], tmp_path: Path, launched: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    from bibmanager.gui import icons as icon_module
+
+    pid = _ingest(library, make_pdf, "Bergstrom", "Boyce", year=1998)
+    window.reload_view()
+    row = next(r for r in range(window.proxy.rowCount()) if window.proxy.index(r, 0).data(PAPER_ID_ROLE) == pid)
+
+    data = tmp_path / "Movie S1.mp4"
+    data.write_bytes(b"\x00\x00\x00\x18ftypmp42 fake video")
+    asked: list[int] = []
+    monkeypatch.setattr(MainWindow, "_ask_drop_target", lambda self, paper, files: asked.append(len(files)) or "supplement")
+    window._on_files_dropped([str(data)], row)  # not a PDF: attached without asking
+    window.runner.wait_idle()
+    assert asked == [] and library.get_paper(pid).attachments == 1
+    si = make_pdf("mmc2.pdf", lines=["supplementary experiments"])
+    window._on_files_dropped([str(si)], row)  # a PDF on a document that has one: asked, then attached
+    window.runner.wait_idle()
+    assert asked == [1]
+    attachments = library.attachments(pid)
+    assert [a.file_name for a in attachments] == ["Bergstrom_Boyce_1998_S1.mp4", "Bergstrom_Boyce_1998_S2.pdf"]
+
+    window.select_ids([pid])
+    details = window.inspector.details
+    assert not details.supplements.isHidden() and len(details._attachment_rows) == 2
+    index = window.proxy.index(row, int(Col.FILE))
+    assert "+ 2 supplementary files" in index.data(Qt.ItemDataRole.ToolTipRole)
+    assert index.data(Qt.ItemDataRole.DecorationRole).cacheKey() == icon_module.pdf_with_supplements().cacheKey()
+
+    details.attachmentAction.emit("open", attachments[0].id)
+    assert Path(launched[-1]) == library.attachment_path(attachments[0])
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Movie of the test", True))
+    details.attachmentAction.emit("rename", attachments[0].id)
+    assert library.get_attachment(attachments[0].id).label == "Movie of the test"
+    main_before = library.get_paper(pid).sha256
+    details.attachmentAction.emit("promote", attachments[1].id)
+    assert library.get_paper(pid).sha256 == attachments[1].sha256
+    assert library.get_attachment(attachments[1].id).sha256 == main_before
+    assert library.search_fulltext("supplementary experiments")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    details.attachmentAction.emit("remove", attachments[0].id)
+    window.runner.wait_idle()
+    assert library.get_paper(pid).attachments == 1 and not library.attachment_path(attachments[0]).exists()
+    assert len(window.inspector.details._attachment_rows) == 1
+
+
+
+# =========================================================================== Ask AI (v0.7)
+def test_ask_ai_panel_streams_an_answer_and_saves_it_to_the_notes(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from bibmanager.core import assistant as core_assistant
+    from bibmanager.gui import assistant_panel as panel_module
+
+    pid = _ingest(library, make_pdf, "Anand", year=2012, lines=["We assume incompressibility, J = 1."])
+    window.reload_view()
+    window.select_ids([pid])
+    panel = window.inspector.assistant
+    assert panel.paper is not None and panel.paper.id == pid
+    assert "No API key for Claude" in panel.info.text()
+
+    seen: dict[str, object] = {}
+
+    def fake_ask(self, context, history, question, on_text, cancelled=lambda: False):  # type: ignore[no-untyped-def]
+        seen.update(context=context, history=list(history), question=question, model=self.settings.model,
+                    key=self.api_key, thread=threading.current_thread().name)  # fmt: skip
+        for piece in ("Incompressibility, ", "$J = 1$ (p. 1)."):
+            on_text(piece)
+        return core_assistant.Usage(1200, 12, 1000)
+
+    monkeypatch.setattr(core_assistant.AssistantClient, "ask", fake_ask)
+    monkeypatch.setattr(panel_module.QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    panel.keys.set("anthropic", "sk-test")
+    panel.model.setCurrentText("claude-test")
+    assert library.config.assistant_models["anthropic"] == "claude-test"
+    panel.question.setPlainText("Which assumptions?")
+    panel._send_clicked()
+
+    def wait(predicate) -> None:  # type: ignore[no-untyped-def]
+        import time
+
+        deadline = time.monotonic() + 10
+        while not predicate() and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert predicate()
+
+    wait(lambda: panel._job is None and pid in panel.conversations)
+    exchange = panel.conversations[pid].exchanges[-1]
+    assert exchange.answer == "Incompressibility, $J = 1$ (p. 1)." and exchange.done and not exchange.error
+    assert seen["question"] == "Which assumptions?" and seen["model"] == "claude-test" and seen["key"] == "sk-test"
+    assert seen["thread"] != threading.current_thread().name  # PDF reading and HTTP ran in a worker thread
+    context = seen["context"]
+    assert "--- page 1 ---" in context.text and "incompressibility" in context.text  # type: ignore[attr-defined]
+    assert "Incompressibility" in panel.transcript.toPlainText()
+    assert library.config.assistant_acknowledged == ("anthropic",)
+    assert "anthropic" in (window.user_config).read_text()  # settings saved, the key is not
+    assert "sk-test" not in window.user_config.read_text()
+
+    panel.question.setPlainText("And the boundary conditions?")  # a follow-up carries the history
+    panel._send_clicked()
+    wait(lambda: panel._job is None and len(panel.conversations[pid].exchanges) == 2)
+    assert [m.role for m in seen["history"]] == ["user", "assistant"]  # type: ignore[attr-defined]
+
+    panel.save_to_notes()
+    notes = library.get_paper(pid).notes
+    assert "Ask AI" in notes and "Q: And the boundary conditions?" in notes and "$J = 1$" in notes
+    assert window.inspector.notes.toPlainText() == notes
+
+    launched: list[str] = []
+    revealed: list[Path] = []
+    panel._launch = lambda url: launched.append(url.toString())
+    panel._reveal = revealed.append
+    panel.question.setPlainText("What is J?")
+    panel.ask_in_browser("Claude", "https://claude.ai/new")
+    assert launched == ["https://claude.ai/new"] and revealed and revealed[0].suffix == ".pdf"
+    assert "Question: What is J?" in QGuiApplication.clipboard().text()

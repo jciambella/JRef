@@ -72,11 +72,12 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME, APP_SUBTITLE
 from ..core.config import user_config_path
+from ..core.secrets import KeyStore
 from ..core.extractor import pdf_outline
 from ..core.inbox import InboxWatcher
 from ..core.library import DuplicateDoiError, ForeignBibFileError, IngestResult, IngestStatus, Library, LibraryError
 from ..core.mendeley import MendeleyImportPlan, MendeleyImportReport, default_mendeley_pdf_folder, summarize
-from ..core.models import Collection, Paper, split_list_field
+from ..core.models import Attachment, Collection, Paper, split_list_field
 from ..core.query import SCOPE_LABELS, SCOPES, SYNTAX_HELP, parse_query
 from . import icons, theme
 from .dialogs import (
@@ -407,6 +408,8 @@ class MainWindow(QMainWindow):
                                   tip="Re-key documents as Surname_Year, Surname1_Surname2_Year, ...")  # fmt: skip
         self.act_attach_pdf = a("Attach PDF...", self.attach_pdf_dialog,
                                 tip="Choose the PDF of the selected reference, or drop a PDF onto its row")  # fmt: skip
+        self.act_add_supplements = a("Add Supplementary Files...", self.add_supplements_dialog,
+                                     tip="Attach supplementary information, data or videos to the selected document")  # fmt: skip
         self.act_find_pdfs = a("Find Missing PDFs...", self.find_missing_pdfs,
                                tip="Search a folder for the PDFs of documents that have none")  # fmt: skip
         self.act_open_inbox = a("Open Inbox Folder", self.open_inbox_folder,
@@ -643,6 +646,16 @@ class MainWindow(QMainWindow):
         self.mendeley.finished.connect(self._on_mendeley_finished)
         self.inbox_bridge.fileReady.connect(self._on_inbox_file)
         self.inspector.attachFileRequested.connect(self.attach_pdf_dialog)
+        self.inspector.attachmentAction.connect(self._on_attachment_action)
+        self.inspector.addSupplementsRequested.connect(self.add_supplements_dialog)
+        self.inspector.assistant.bind(
+            self.library,
+            KeyStore(self.user_config.parent),
+            save_settings=self._save_assistant_settings,
+            launch=self._launch,
+            reveal=self._reveal,
+        )
+        self.inspector.assistant.paperChanged.connect(self._on_assistant_notes)
         self.attacher.progress.connect(self._on_import_progress)
         self.attacher.attached.connect(self._on_pdf_attached)
         self.attacher.finished.connect(self._on_attach_finished)
@@ -903,7 +916,11 @@ class MainWindow(QMainWindow):
     def _show_paper(self, paper: Paper) -> None:
         pdf = self.library.pdf_path(paper)
         name = pdf.name if pdf is not None else ""
-        self.inspector.set_paper(paper, [c.name for c in self.library.collections_of(paper.id)], name)
+        attachments = self.library.attachments(paper.id) if paper.attachments else []
+        available = {a.id: self.library.attachment_available(a) for a in attachments}
+        self.inspector.set_paper(
+            paper, [c.name for c in self.library.collections_of(paper.id)], name, attachments, available
+        )
         if pdf is None:
             self._outline_for = paper.id
             self.inspector.set_outline(paper.id, "No PDF attached", None, "This reference has no PDF.")
@@ -1308,14 +1325,47 @@ class MainWindow(QMainWindow):
 
     # ================================================================== attaching PDFs
     def _on_files_dropped(self, paths: list[str], row: int) -> None:
+        """Files dropped on the list. Onto a row: one PDF on a document without PDF becomes its PDF; other files
+        (not PDFs, or several) can become its supplementary files. Elsewhere: PDFs are imported as documents."""
         pdfs = expand_pdf_paths(paths)
-        if len(pdfs) == 1 and row >= 0:
+        files = [Path(p) for p in paths if Path(p).is_file()]
+        paper = None
+        if row >= 0:
             pid = self.proxy.index(row, 0).data(PAPER_ID_ROLE)
             paper = self.library.get_paper(int(pid)) if pid is not None else None
-            if paper is not None and not paper.has_pdf:
+        if paper is not None:
+            if len(files) == 1 and len(pdfs) == 1 and not paper.has_pdf:
                 self.attach_files(paper.id, pdfs[0])
                 return
+            non_pdf = [f for f in files if f.suffix.lower() != ".pdf"]
+            choice = "supplement" if non_pdf and not pdfs else self._ask_drop_target(paper, files)
+            if choice == "supplement":
+                main = None if paper.has_pdf else next((f for f in files if f.suffix.lower() == ".pdf"), None)
+                if main is not None:  # a document without PDF: the first PDF becomes its PDF
+                    self.attach_files(paper.id, main)
+                self.attach_supplements(paper.id, [f for f in files if f != main])
+                return
+            if choice is None:
+                return
         self.import_paths(paths, self._target_folder())
+
+    def _ask_drop_target(self, paper: Paper, files: list[Path]) -> str | None:
+        """"supplement" | "import" | None (cancelled) for files dropped onto a document's row."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Files dropped on a document")
+        n = len(files)
+        box.setText(f"{n} file{'s' if n != 1 else ''} dropped on {paper.citation_key}.")
+        box.setInformativeText(
+            "Attach them to this document as supplementary files, or import the PDFs as new documents?"
+            + ("" if paper.has_pdf else "\nThe first PDF becomes the document's PDF.")
+        )
+        attach = box.addButton("Attach to This Document", QMessageBox.ButtonRole.AcceptRole)
+        new = box.addButton("Import as New Documents", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(attach)
+        box.exec()
+        clicked = box.clickedButton()
+        return "supplement" if clicked is attach else "import" if clicked is new else None
 
     def attach_pdf_dialog(self) -> None:
         papers = self.selected_papers()
@@ -1337,6 +1387,112 @@ class MainWindow(QMainWindow):
         self._attach_search = False
         self.attacher.attach([(paper_id, path)], mode)
         self.notify(f"Attaching {path.name}...")
+
+    # ================================================================== supplementary files
+    def add_supplements_dialog(self) -> None:
+        papers = self.selected_papers()
+        if len(papers) != 1:
+            self.notify("Select one document")
+            return
+        start = str(self.settings.value("import/lastDir", str(Path.home())))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, f"Supplementary files for {papers[0].citation_key}", start, "All files (*)"
+        )
+        if paths:
+            self.settings.setValue("import/lastDir", str(Path(paths[0]).parent))
+            self.attach_supplements(papers[0].id, [Path(p) for p in paths])
+
+    def attach_supplements(self, paper_id: int, paths: list[Path], mode: str | None = None) -> None:
+        """Hash and read the files in the background, then attach them (GUI thread, as for imports)."""
+        if not paths:
+            return
+        self.notify(f"Attaching {len(paths)} supplementary file{'s' if len(paths) != 1 else ''}...")
+        for path in paths:
+            self.runner.submit(
+                self.library.prepare_attachment,
+                path,
+                on_done=partial(self._commit_supplement, paper_id=paper_id, mode=mode),
+                on_error=partial(self._supplement_failed, path),
+            )
+
+    def _commit_supplement(self, candidate: Any, paper_id: int, mode: str | None) -> None:
+        try:
+            attachment = self.library.add_supplement(paper_id, candidate, mode=mode)
+        except (LibraryError, OSError, KeyError) as exc:
+            self._supplement_failed(Path(candidate.path), str(exc))
+            return
+        self._refresh_paper(self.library.get_paper(paper_id))
+        self.notify(f"Supplementary file {attachment.file_name} attached")
+
+    def _supplement_failed(self, path: Path, message: str) -> None:
+        QMessageBox.warning(self, "Supplementary file", f"{Path(path).name}: {message}")
+
+    def _on_attachment_action(self, action: str, attachment_id: int) -> None:
+        try:
+            attachment = self.library.get_attachment(attachment_id)
+        except KeyError:
+            return
+        path = self.library.attachment_path(attachment)
+        if action in ("open", "reveal") and not path.is_file():
+            QMessageBox.warning(self, "File not found", f"The file is not on this computer:\n{path}")
+            return
+        if action == "open":
+            self._launch(QUrl.fromLocalFile(str(path)))
+        elif action == "reveal":
+            self._reveal(path)
+        elif action == "rename":
+            text, ok = QInputDialog.getText(self, "Rename", "Name shown for this file:", text=attachment.display_name)
+            if ok and text.strip():
+                self.library.rename_supplement(attachment.id, text)
+                self._refresh_paper(self.library.get_paper(attachment.paper_id))
+        elif action == "promote":
+            try:
+                paper = self.library.promote_supplement(attachment.id)
+            except (LibraryError, OSError) as exc:
+                QMessageBox.warning(self, "Set as Main PDF", str(exc))
+                return
+            self._outline_for = None  # the table of contents is now the one of the new main PDF
+            self._refresh_paper(paper)
+            self.notify(f"{attachment.display_name} is now the PDF of {paper.citation_key}")
+        elif action == "remove":
+            self.remove_supplement(attachment)
+
+    def remove_supplement(self, attachment: Attachment) -> None:
+        detail = (
+            "The file is left where it is (linked file)."
+            if attachment.linked
+            else f"The file {attachment.file_name} is deleted from the library folder."
+        )
+        answer = QMessageBox.question(self, "Remove supplementary file", f"Remove \"{attachment.display_name}\"?\n\n{detail}")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.library.remove_supplement(attachment.id)
+        paper_id = attachment.paper_id
+        self._refresh_paper(self.library.get_paper(paper_id))
+        sources = self.library.fulltext_sources(paper_id)  # the full-text entry is rebuilt without its text
+        self.runner.submit(
+            self.library.read_fulltext,
+            sources,
+            on_done=partial(self._set_fulltext, paper_id),
+            on_error=lambda message: log.warning("Full text not rebuilt: %s", message),
+        )
+
+    def _set_fulltext(self, paper_id: int, text: str) -> None:
+        try:
+            self.library.set_fulltext(paper_id, text)
+        except KeyError:  # deleted meanwhile
+            pass
+
+    # ================================================================== Ask AI
+    def _save_assistant_settings(self) -> None:
+        try:
+            self.library.config.save_user_settings(self.user_config)
+        except OSError as exc:
+            log.warning("Could not save the Ask AI settings: %s", exc)
+
+    def _on_assistant_notes(self, paper: Paper) -> None:
+        self._refresh_paper(paper)
+        self.notify(f"Answer saved in the notes of {paper.citation_key}")
 
     def find_missing_pdfs(self) -> None:
         if self.attacher.running:
@@ -1465,6 +1621,17 @@ class MainWindow(QMainWindow):
         lookup.setEnabled(len(papers) == 1)
         if len(papers) == 1 and not papers[0].has_pdf:
             menu.addAction(self.act_attach_pdf)
+        if len(papers) == 1:
+            menu.addAction(self.act_add_supplements)
+            if papers[0].attachments:
+                supplements = menu.addMenu(icons.paperclip(), "Supplementary Files")
+                for attachment in self.library.attachments(papers[0].id):
+                    self._menu_action(
+                        supplements,
+                        attachment.display_name,
+                        partial(self._on_attachment_action, "open", attachment.id),
+                        icons.pdf_file() if attachment.is_pdf else icons.paperclip(),
+                    )
         linked = [p.id for p in papers if p.pdf_linked]
         if linked:
             self._menu_action(menu, "Copy Linked PDF into Library Storage", partial(self.store_linked, linked))

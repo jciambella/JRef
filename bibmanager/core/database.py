@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    Attachment,
     Collection,
     Paper,
     PaperMetadata,
@@ -27,7 +28,7 @@ from .models import (
     extra_fields_to_json,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Schema v3 (rebuilt in place from v1/v2 by ``Database._migrate``):
 # * ``sha256`` / ``relative_pdf_path`` are NULL for references without a PDF (e.g. imported from a .bib);
@@ -39,6 +40,8 @@ SCHEMA_VERSION = 4
 # (``id`` is local to one database) -- and the ``sync_*`` bookkeeping tables of core/sync.py. Only the citation
 # key is unique at the database level: the same PDF or DOI added on two devices before they synchronise must be
 # storable as two entries (the import pipeline still refuses duplicates on one device).
+# Schema v5: ``attachments`` -- supplementary files of a paper, besides its main PDF (``papers.relative_pdf_path``).
+# ``papers_view`` adds ``n_attachments``; every query that builds ``Paper`` objects reads from it.
 _PAPERS_TABLE = """
 CREATE TABLE IF NOT EXISTS {name} (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +108,20 @@ CREATE TABLE IF NOT EXISTS paper_collections (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS ix_paper_collections_collection ON paper_collections(collection_id);
 
+CREATE TABLE IF NOT EXISTS attachments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid           TEXT    NOT NULL UNIQUE,
+    paper_id      INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    relative_path TEXT    NOT NULL,
+    linked        INTEGER NOT NULL DEFAULT 0 CHECK (linked IN (0, 1)),
+    sha256        TEXT,
+    label         TEXT    NOT NULL DEFAULT '',
+    position      INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS ix_attachments_paper ON attachments(paper_id);
+CREATE INDEX IF NOT EXISTS ix_attachments_sha   ON attachments(sha256) WHERE sha256 IS NOT NULL;
+
 -- Device synchronisation (core/sync.py). All of it is local bookkeeping of this database.
 CREATE TABLE IF NOT EXISTS sync_meta   (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS sync_shadow (kind TEXT NOT NULL, uid TEXT NOT NULL, data TEXT NOT NULL,
@@ -116,6 +133,11 @@ CREATE TABLE IF NOT EXISTS sync_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, w
 CREATE INDEX IF NOT EXISTS ix_sync_pending_uid ON sync_pending(wait_uid);
 """
 )
+
+_VIEW = """
+CREATE VIEW papers_view AS
+    SELECT p.*, (SELECT COUNT(*) FROM attachments a WHERE a.paper_id = p.id) AS n_attachments FROM papers p;
+"""
 
 _UID_INDEXES = """
 CREATE UNIQUE INDEX IF NOT EXISTS ux_papers_uid      ON papers(uid)      WHERE uid IS NOT NULL;
@@ -229,6 +251,7 @@ class Database:
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if version > SCHEMA_VERSION:
             raise DatabaseError(f"library.db schema v{version} is newer than this program (v{SCHEMA_VERSION})")
+        self.conn.execute("DROP VIEW IF EXISTS papers_view")  # recreated below (it pins the columns of papers)
         self.conn.executescript(_SCHEMA)
         info = {row["name"]: row for row in self.conn.execute("PRAGMA table_info(papers)")}
         if any(c not in info for c in (*_V3_MARKER_COLUMNS, "uid")) or info["sha256"]["notnull"]:
@@ -237,6 +260,7 @@ class Database:
             self.conn.executescript(_SCHEMA)  # indexes went away with the old table
         self._ensure_uids()
         self._ensure_fts()
+        self.conn.executescript(_VIEW)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _backup_before_upgrade(self, version: int) -> None:
@@ -368,6 +392,7 @@ class Database:
             last_opened_at=row["last_opened_at"] or "",
             tags=row["tags"] or "",
             my_publication=bool(row["my_publication"]),
+            attachments=int(row["n_attachments"]) if "n_attachments" in row.keys() else 0,
         )
 
     def insert_paper(
@@ -446,14 +471,21 @@ class Database:
             self.conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
 
     def _fetch_paper(self, where: str, params: Sequence[Any]) -> Paper | None:
-        row = self.conn.execute(f"SELECT * FROM papers WHERE {where}", params).fetchone()
+        row = self.conn.execute(f"SELECT * FROM papers_view WHERE {where}", params).fetchone()
         return self._row_to_paper(row) if row else None
 
     def get_paper(self, paper_id: int) -> Paper | None:
         return self._fetch_paper("id = ?", (paper_id,))
 
-    def get_paper_by_sha256(self, sha256: str) -> Paper | None:
-        return self._fetch_paper("sha256 = ?", (sha256,))
+    def get_paper_by_sha256(self, sha256: str, *, include_attachments: bool = True) -> Paper | None:
+        """The paper whose main PDF -- or, with ``include_attachments``, one of whose supplementary files -- has
+        these bytes."""
+        paper = self._fetch_paper("sha256 = ?", (sha256,))
+        if paper is None and include_attachments:
+            row = self.conn.execute("SELECT paper_id FROM attachments WHERE sha256 = ? LIMIT 1", (sha256,)).fetchone()
+            if row is not None:
+                paper = self.get_paper(int(row[0]))
+        return paper
 
     def get_paper_by_doi(self, doi: str) -> Paper | None:
         return self._fetch_paper("doi = ?", ((doi or "").strip().lower(),))
@@ -476,35 +508,35 @@ class Database:
         return [self._row_to_paper(r) for r in self.conn.execute(sql, params)]
 
     def list_papers(self) -> list[Paper]:
-        return self._papers("SELECT * FROM papers ORDER BY citation_key")
+        return self._papers("SELECT * FROM papers_view ORDER BY citation_key")
 
     def papers_in_collection(self, collection_id: int) -> list[Paper]:
         return self._papers(
-            "SELECT p.* FROM papers p JOIN paper_collections pc ON pc.paper_id = p.id "
+            "SELECT p.* FROM papers_view p JOIN paper_collections pc ON pc.paper_id = p.id "
             "WHERE pc.collection_id = ? ORDER BY p.citation_key",
             (collection_id,),
         )
 
     def papers_needing_review(self) -> list[Paper]:
-        return self._papers("SELECT * FROM papers WHERE needs_review = 1 ORDER BY citation_key")
+        return self._papers("SELECT * FROM papers_view WHERE needs_review = 1 ORDER BY citation_key")
 
     def favorite_papers(self) -> list[Paper]:
-        return self._papers("SELECT * FROM papers WHERE favorite = 1 ORDER BY citation_key")
+        return self._papers("SELECT * FROM papers_view WHERE favorite = 1 ORDER BY citation_key")
 
     def my_publications(self) -> list[Paper]:
-        return self._papers("SELECT * FROM papers WHERE my_publication = 1 ORDER BY citation_key")
+        return self._papers("SELECT * FROM papers_view WHERE my_publication = 1 ORDER BY citation_key")
 
     def recently_added(self, limit: int = 50) -> list[Paper]:
-        return self._papers("SELECT * FROM papers ORDER BY created_at DESC, id DESC LIMIT ?", (limit,))
+        return self._papers("SELECT * FROM papers_view ORDER BY created_at DESC, id DESC LIMIT ?", (limit,))
 
     def recently_read(self, limit: int = 50) -> list[Paper]:
         return self._papers(
-            "SELECT * FROM papers WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM papers_view WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?", (limit,)
         )
 
     def unassigned_papers(self) -> list[Paper]:
         return self._papers(
-            "SELECT * FROM papers WHERE id NOT IN (SELECT paper_id FROM paper_collections) ORDER BY citation_key"
+            "SELECT * FROM papers_view WHERE id NOT IN (SELECT paper_id FROM paper_collections) ORDER BY citation_key"
         )
 
     def counts(self) -> dict[str, int]:
@@ -527,7 +559,7 @@ class Database:
         escaped = (text or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{escaped}%"
         return self._papers(
-            "SELECT * FROM papers WHERE "
+            "SELECT * FROM papers_view WHERE "
             + " OR ".join(
                 f"{c} LIKE :q ESCAPE '\\'"
                 for c in ("citation_key", "title", "authors_json", "journal", "doi", "keywords", "tags")
@@ -535,6 +567,75 @@ class Database:
             + " ORDER BY citation_key",
             {"q": like},
         )
+
+    # ------------------------------------------------------------------ attachments (supplementary files)
+    @staticmethod
+    def _row_to_attachment(row: sqlite3.Row) -> Attachment:
+        return Attachment(
+            id=row["id"],
+            uid=row["uid"],
+            paper_id=row["paper_id"],
+            relative_path=row["relative_path"],
+            linked=bool(row["linked"]),
+            sha256=row["sha256"],
+            label=row["label"] or "",
+            position=int(row["position"]),
+            created_at=row["created_at"] or "",
+        )
+
+    def insert_attachment(
+        self,
+        paper_id: int,
+        *,
+        relative_path: str,
+        linked: bool = False,
+        sha256: str | None = None,
+        label: str = "",
+        position: int = 1,
+        uid: str | None = None,
+    ) -> int:
+        with self.transaction():
+            cur = self.conn.execute(
+                "INSERT INTO attachments (uid, paper_id, relative_path, linked, sha256, label, position) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (uid or new_uid(), paper_id, relative_path, int(linked), sha256, label, position),
+            )
+        return _rowid(cur)
+
+    def update_attachment(self, attachment_id: int, **fields: Any) -> None:
+        allowed = {"relative_path", "linked", "sha256", "label", "position", "paper_id"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"Unknown attachment fields: {sorted(unknown)}")
+        if not fields:
+            return
+        values = {k: (int(v) if k == "linked" else v) for k, v in fields.items()}
+        assignments = ", ".join(f"{k} = :{k}" for k in values)
+        with self.transaction():
+            cur = self.conn.execute(f"UPDATE attachments SET {assignments} WHERE id = :_id", values | {"_id": attachment_id})
+            if cur.rowcount != 1:
+                raise KeyError(attachment_id)
+
+    def delete_attachment(self, attachment_id: int) -> None:
+        with self.transaction():
+            self.conn.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+
+    def get_attachment(self, attachment_id: int) -> Attachment | None:
+        row = self.conn.execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+        return self._row_to_attachment(row) if row else None
+
+    def attachments_of(self, paper_id: int) -> list[Attachment]:
+        rows = self.conn.execute("SELECT * FROM attachments WHERE paper_id = ? ORDER BY position, id", (paper_id,))
+        return [self._row_to_attachment(r) for r in rows]
+
+    def attachment_path_taken(self, relative_path: str, *, exclude_id: int | None = None) -> bool:
+        """True if a main PDF or another supplementary file is recorded at this path (case-insensitively)."""
+        row = self.conn.execute(
+            "SELECT 1 FROM attachments WHERE relative_path = ? COLLATE NOCASE AND id IS NOT ? "
+            "UNION ALL SELECT 1 FROM papers WHERE relative_pdf_path = ? COLLATE NOCASE LIMIT 1",
+            (relative_path, exclude_id, relative_path),
+        ).fetchone()
+        return row is not None
 
     # ------------------------------------------------------------------ collections
     @staticmethod
@@ -666,6 +767,22 @@ class Database:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (paper_id, paper_id, meta.title, meta.authors_text(), meta.abstract, full_text),
             )
+
+    def append_fulltext(self, paper_id: int, meta: PaperMetadata, text: str) -> None:
+        """Add the text of a supplementary file to the paper's full-text entry."""
+        if not self.has_fts or not text.strip():
+            return
+        with self.transaction():
+            cur = self.conn.execute(
+                "UPDATE papers_fts SET full_text = coalesce(full_text, '') || char(10) || ? WHERE rowid = ?",
+                (text, paper_id),
+            )
+            if cur.rowcount == 0:
+                self.conn.execute(
+                    "INSERT INTO papers_fts (rowid, paper_id, title, authors_text, abstract, full_text) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (paper_id, paper_id, meta.title, meta.authors_text(), meta.abstract, text),
+                )
 
     def _update_fts_metadata(self, paper_id: int, meta: PaperMetadata) -> None:
         if not self.has_fts:

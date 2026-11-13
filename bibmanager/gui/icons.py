@@ -217,6 +217,57 @@ def document() -> QIcon:
     return _icon(_document)
 
 
+def _paperclip(p: QPainter, color: QColor | None = None, width: float = 1.5) -> None:
+    """A paper clip, tilted 40 degrees (supplementary files)."""
+    p.save()
+    p.translate(12, 12)
+    p.rotate(40)
+    p.translate(-12, -12)
+    _stroke(p, color, width)
+    path = QPainterPath()
+    path.moveTo(14.6, 7.0)
+    path.lineTo(14.6, 16.0)
+    path.arcTo(QRectF(8.4, 12.9, 6.2, 6.2), 0, -180)  # bottom bend, right -> left
+    path.lineTo(8.4, 5.6)
+    path.arcTo(QRectF(8.4, 1.6, 4.4, 4.4), 180, -180)  # top bend, left -> right
+    path.lineTo(12.8, 15.4)
+    path.arcTo(QRectF(10.4, 14.2, 2.4, 2.4), 0, -180)
+    path.lineTo(10.4, 7.6)
+    p.drawPath(path)
+    p.restore()
+
+
+@themed
+def paperclip() -> QIcon:
+    return _icon(_paperclip)
+
+
+@themed
+def pdf_with_supplements() -> QIcon:
+    """PDF glyph with a small paper clip: the document also has supplementary files."""
+
+    def draw(p: QPainter) -> None:
+        _document(p, 6.5, 2.5, 13, 19)
+        _clear(p, lambda: p.drawRoundedRect(QRectF(2.5, 11, 14, 9), 2, 2))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_danger)
+        p.drawRoundedRect(QRectF(3.5, 12, 12, 7), 1.6, 1.6)
+        font = QFont()
+        font.setPixelSize(5)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor("white"))
+        p.drawText(QRectF(3.5, 12, 12, 7), Qt.AlignmentFlag.AlignCenter, "PDF")
+        _clear(p, lambda: p.drawEllipse(QPointF(19, 5), 5.2, 5.2))
+        p.save()
+        p.translate(13.2, -0.6)
+        p.scale(0.5, 0.5)
+        _paperclip(p, _accent, 2.6)
+        p.restore()
+
+    return _icon(draw)
+
+
 # --------------------------------------------------------------------------- navigation
 def _two_documents(p: QPainter, color: QColor | None = None, width: float = 1.5) -> None:
     _stroke(p, color, width)

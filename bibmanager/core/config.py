@@ -120,6 +120,16 @@ class AppConfig:
     adopt_folder_database: bool = True  # sharing an existing library: move <root>/library.db to the data folder
     # Linked PDFs recorded with another device's absolute path: {"C:/Users/x/Papers": "/storage/.../Papers"}
     linked_path_map: dict[str, str] = field(default_factory=dict)
+    # ---- Ask AI panel (core/assistant.py). API keys are never stored here (core/secrets.py).
+    assistant_provider: str = "anthropic"
+    assistant_models: dict[str, str] = field(default_factory=dict)  # provider id -> model
+    assistant_base_urls: dict[str, str] = field(default_factory=dict)  # provider id -> server address
+    assistant_workspace_id: str = ""  # Claude keys that are not scoped to one workspace
+    assistant_max_chars: int = 300_000
+    assistant_max_tokens: int = 4096
+    assistant_send_pdf: bool = False  # send the PDF file itself (figures, equations) where the provider reads PDFs
+    assistant_supplements: bool = True  # include the text of supplementary PDFs
+    assistant_acknowledged: tuple[str, ...] = ()  # providers whose data notice the user has accepted
 
     def __post_init__(self) -> None:
         self.library_root = Path(self.library_root).expanduser()
@@ -128,6 +138,11 @@ class AppConfig:
         else:
             self.local_data_dir = None
         self.linked_path_map = {str(k): str(v) for k, v in dict(self.linked_path_map or {}).items() if k and v}
+        self.assistant_models = {str(k): str(v) for k, v in dict(self.assistant_models or {}).items()}
+        self.assistant_base_urls = {str(k): str(v) for k, v in dict(self.assistant_base_urls or {}).items() if v}
+        self.assistant_acknowledged = tuple(dict.fromkeys(str(p) for p in self.assistant_acknowledged or ()))
+        self.assistant_max_chars = max(20_000, int(self.assistant_max_chars))
+        self.assistant_max_tokens = max(256, int(self.assistant_max_tokens))
         if self.inbox_folder is not None and str(self.inbox_folder).strip():
             self.inbox_folder = Path(self.inbox_folder).expanduser()
         else:
@@ -158,6 +173,7 @@ class AppConfig:
         bibtex = data.get("bibtex") or {}
         inbox = data.get("inbox") or {}
         sync = data.get("sync") or {}
+        assistant = data.get("assistant") or {}
         root = Path(str(data.get("library_root", DEFAULT_LIBRARY_ROOT))).expanduser()
         if not root.is_absolute() and base_dir is not None:
             root = base_dir / root
@@ -178,6 +194,15 @@ class AppConfig:
             local_data_dir=Path(str(sync["local_data_dir"])) if sync.get("local_data_dir") else None,
             write_bib_files=bool(bibtex.get("write_files", True)),
             linked_path_map=dict(data.get("linked_path_map") or {}),
+            assistant_provider=str(assistant.get("provider") or "anthropic"),
+            assistant_models=dict(assistant.get("models") or {}),
+            assistant_base_urls=dict(assistant.get("base_urls") or {}),
+            assistant_workspace_id=str(assistant.get("workspace_id") or ""),
+            assistant_max_chars=int(assistant.get("max_chars") or 300_000),
+            assistant_max_tokens=int(assistant.get("max_tokens") or 4096),
+            assistant_send_pdf=bool(assistant.get("send_pdf", False)),
+            assistant_supplements=bool(assistant.get("supplements", True)),
+            assistant_acknowledged=tuple(assistant.get("acknowledged") or ()),
         )
 
     @classmethod
@@ -223,6 +248,17 @@ class AppConfig:
             },
             "sync": {"enabled": self.sync_enabled, "device_name": self.device_name},
             "linked_path_map": dict(self.linked_path_map),
+            "assistant": {
+                "provider": self.assistant_provider,
+                "models": dict(self.assistant_models),
+                "base_urls": dict(self.assistant_base_urls),
+                "workspace_id": self.assistant_workspace_id,
+                "max_chars": self.assistant_max_chars,
+                "max_tokens": self.assistant_max_tokens,
+                "send_pdf": self.assistant_send_pdf,
+                "supplements": self.assistant_supplements,
+                "acknowledged": list(self.assistant_acknowledged),
+            },
         }
 
     def save_user_settings(self, path: Path | None = None) -> Path:
@@ -232,6 +268,7 @@ class AppConfig:
         merged = _deep_merge(current, self.user_settings())
         merged["extra_protected_words"] = list(self.extra_protected_words)  # lists are replaced, not merged
         merged["linked_path_map"] = dict(self.linked_path_map)  # so is the path map (entries can be removed)
+        merged["assistant"] = self.user_settings()["assistant"]  # and the assistant block (dicts are replaced)
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".config.", suffix=".json", dir=target.parent)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

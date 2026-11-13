@@ -8,7 +8,7 @@ Syntax (terms are combined with AND; matching ignores case and accents)::
     journal:solids  in:"J. Mech"   publication (journal, proceedings, school...)
     year:2020  year:2015-2020  year:>=2018  year:<2000  year:2018-
     tag:review  kw:hydrogel  folder:thesis  type:book  key:anand_2023  doi:10.1016
-    is:favorite  is:unread  is:read  is:review  is:mine  has:pdf  has:notes  has:doi
+    is:favorite  is:unread  is:read  is:review  is:mine  has:pdf  has:notes  has:doi  has:supp
     -tag:review  -author:smith  -word   exclusion
 
 A ``word:`` prefix that is not a known field (``http:``, ``10.1016/x:y``) is kept as plain text.
@@ -44,7 +44,7 @@ FIELDS: dict[str, tuple[str, ...]] = {
 ALIASES = {alias: name for name, aliases in FIELDS.items() for alias in aliases}
 FLAGS = {
     "is": {"favorite", "favourite", "fav", "starred", "read", "unread", "review", "mine", "linked"},
-    "has": {"pdf", "file", "notes", "note", "doi", "abstract", "tags", "tag"},
+    "has": {"pdf", "file", "notes", "note", "doi", "abstract", "tags", "tag", "supp", "supplement", "supplementary", "si"},
 }
 # Fields searched by free words in the "all fields" scope (full text is a separate scope, via FTS5).
 ALL_FIELDS = ("author", "title", "journal", "year", "tag", "keyword", "abstract", "notes", "key", "id", "publisher")
@@ -185,6 +185,7 @@ def build_record(paper: Paper, folders: Iterable[str] = ()) -> SearchRecord:
         "doi" if m.doi else "",
         "abstract" if m.abstract.strip() else "",
         "tags" if split_list_field(paper.tags) else "",
+        "supp" if paper.attachments else "",
     }
     flags.discard("")
     all_text = " \n".join(folded[name] for name in ALL_FIELDS)
@@ -192,7 +193,7 @@ def build_record(paper: Paper, folders: Iterable[str] = ()) -> SearchRecord:
 
 
 _FLAG_SYNONYMS = {"favourite": "favorite", "fav": "favorite", "starred": "favorite", "file": "pdf", "note": "notes",
-                  "tag": "tags"}  # fmt: skip
+                  "tag": "tags", "supplement": "supp", "supplementary": "supp", "si": "supp"}  # fmt: skip
 
 
 def _term_matches(term: Term, record: SearchRecord, scope: str) -> bool:

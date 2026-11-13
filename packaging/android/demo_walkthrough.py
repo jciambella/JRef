@@ -57,6 +57,7 @@ for i, (authors, year, title, journal, folders, has_pdf) in enumerate(DATA):
         p = desk.add_reference(meta, folders[0].id if folders else None).paper
     for f in folders[1:]: desk.add_to_collection(p.id, f.id)
     ids.append(p.id)
+desk.add_supplement(ids[0], desk.prepare_attachment(pdf("si.pdf", "Supplementary information")), mode="copy", label="Supplementary Information")
 desk.update_flags(ids[0], favorite=True, is_read=True, tags="phase-field; key reference", notes="Eq. (57): degradation function. Compare with the AT2 model used in Chapter 2.")
 desk.update_flags(ids[1], favorite=True, is_read=True); desk.update_flags(ids[4], is_read=True, tags="tyre")
 desk.update_flags(ids[11], my_publication=True, is_read=True, favorite=True)

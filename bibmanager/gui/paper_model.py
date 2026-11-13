@@ -194,13 +194,15 @@ class PaperTableModel(QAbstractTableModel):
             if col == Col.READ:
                 return icons.read_dot(not paper.is_read)
             if col == Col.FILE:
-                return icons.pdf_file() if paper.has_pdf else None
+                if paper.has_pdf:
+                    return icons.pdf_with_supplements() if paper.attachments else icons.pdf_file()
+                return icons.paperclip() if paper.attachments else None
             return None
         if role == SORT_ROLE:
             return {
                 Col.FAVORITE: int(paper.favorite),
                 Col.READ: int(not paper.is_read),
-                Col.FILE: 0 if paper.has_pdf else 1,
+                Col.FILE: (0 if paper.has_pdf else 2) - (1 if paper.attachments else 0),
                 Col.AUTHORS: _fold(meta.authors_inverted()),
                 Col.TITLE: _fold(meta.title),
                 Col.YEAR: meta.year if meta.year is not None else 0,
@@ -218,9 +220,12 @@ class PaperTableModel(QAbstractTableModel):
             if col == Col.READ:
                 return "Unread" if not paper.is_read else "Read"
             if col == Col.FILE:
+                n = paper.attachments
+                extra = f"\n+ {n} supplementary file{'s' if n != 1 else ''}" if n else ""
                 if not paper.has_pdf:
-                    return "No PDF attached"
-                return f"Linked file: {paper.relative_pdf_path}" if paper.pdf_linked else paper.relative_pdf_path
+                    return ("No PDF attached" + extra) if n else "No PDF attached"
+                main = f"Linked file: {paper.relative_pdf_path}" if paper.pdf_linked else paper.relative_pdf_path
+                return f"{main}{extra}"
             if col in (Col.TITLE, Col.AUTHORS, Col.PUBLISHED_IN, Col.FOLDERS):
                 return self.data(index, Qt.ItemDataRole.DisplayRole) or None
             return None

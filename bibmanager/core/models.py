@@ -253,6 +253,7 @@ class Paper:
     last_opened_at: str = ""
     tags: str = ""  # user tags, "; "-separated
     my_publication: bool = False
+    attachments: int = 0  # number of supplementary files (``Attachment``), besides the main PDF
 
     @property
     def has_pdf(self) -> bool:
@@ -262,6 +263,45 @@ class Paper:
     def pdf_managed(self) -> bool:
         """True if bibmanager owns the file (renames it with the key, files it by year, deletes it)."""
         return self.relative_pdf_path is not None and not self.pdf_linked
+
+
+SUPPLEMENT_TAG = "_S"  # managed supplementary files: pdfs/<YYYY>/<key>_S<n>.<ext>
+
+
+@dataclass(slots=True)
+class Attachment:
+    """A supplementary file of a paper (supplementary information, data, video, ...), besides its main PDF.
+
+    Managed files live next to the main PDF as ``pdfs/<YYYY>/<key>_S<position>.<ext>`` and follow the key;
+    linked files (``linked``) stay where they were and are never renamed, moved or deleted.
+    """
+
+    id: int
+    uid: str
+    paper_id: int
+    relative_path: str
+    linked: bool = False
+    sha256: str | None = None
+    label: str = ""
+    position: int = 1
+    created_at: str = ""
+
+    @property
+    def file_name(self) -> str:
+        return self.relative_path.replace("\\", "/").rsplit("/", 1)[-1]
+
+    @property
+    def extension(self) -> str:
+        name = self.file_name
+        return name[name.rfind(".") :].lower() if "." in name else ""
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.extension == ".pdf"
+
+    @property
+    def display_name(self) -> str:
+        return self.label or self.file_name
 
 
 @dataclass(slots=True)

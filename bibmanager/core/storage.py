@@ -24,7 +24,7 @@ from pathlib import Path, PurePosixPath
 
 from unidecode import unidecode
 
-from .models import YEAR_UNKNOWN_LABEL, Author
+from .models import SUPPLEMENT_TAG, YEAR_UNKNOWN_LABEL, Author
 
 log = logging.getLogger(__name__)
 
@@ -228,21 +228,48 @@ class PdfStorage:
         log.info("Stored %s -> %s (%s)", source.name, relative, mode)
         return relative
 
+    def supplement_path_for(self, citation_key: str, year: int | None, position: int, extension: str) -> str:
+        """``pdfs/<YYYY>/<key>_S<n><ext>``: a supplementary file, next to the main PDF of its paper."""
+        ext = extension.lower() if extension.startswith(".") or not extension else f".{extension.lower()}"
+        name = f"{citation_key}{SUPPLEMENT_TAG}{position}{ext}"
+        return PurePosixPath(PDFS_DIRNAME, self.year_dirname(year), name).as_posix()
+
+    def store_as(self, source: Path, relative: str, *, mode: ImportMode = "copy") -> str:
+        """Move (or copy) ``source`` to the library-relative path ``relative``; refuses to overwrite."""
+        source = Path(source)
+        if not source.is_file():
+            raise StorageError(f"Source file not found: {source}")
+        dest = self.absolute_path(relative)
+        if dest.exists():
+            raise FileExistsError(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "copy":
+            shutil.copy2(source, dest)
+        elif mode == "move":
+            shutil.move(str(source), str(dest))
+        else:
+            raise ValueError(f"Unknown import mode {mode!r}")
+        log.info("Stored %s -> %s (%s)", source.name, relative, mode)
+        return relative
+
     def relocate(self, relative_path: str, new_key: str, new_year: int | None) -> str:
         """Rename/move an already-filed PDF (after an authors/year edit)."""
-        new_relative = self.relative_path_for(new_key, new_year)
+        return self.move_relative(relative_path, self.relative_path_for(new_key, new_year))
+
+    def move_relative(self, relative_path: str, new_relative: str) -> str:
+        """Rename/move a managed file inside the library (case-only renames included)."""
         if new_relative == relative_path:
             return relative_path
         src = self.absolute_path(relative_path)
         dest = self.absolute_path(new_relative)
         if not src.is_file():
-            raise StorageError(f"Physical PDF missing: {src}")
+            raise StorageError(f"Physical file missing: {src}")
         if dest.exists():
             if not same_file(src, dest):
                 raise FileExistsError(dest)
             # Case-only rename (anand_2023 -> Anand_2023) on a case-insensitive file system:
             # go through a temporary name so the new spelling is actually written to disk.
-            tmp = src.with_name(f".rename-{uuid.uuid4().hex}.pdf")
+            tmp = src.with_name(f".rename-{uuid.uuid4().hex}{src.suffix}")
             os.replace(src, tmp)
             if dest.exists() and same_file(tmp, dest):  # two hard links to one file: keep the wanted name only
                 tmp.unlink()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jref"
-version = "0.6.0"
+version = "0.7.0"
 description = "JRef - Journal Reference Manager: local, file-first academic reference manager for LaTeX workflows."
 requires-python = ">=3.11"
 license = { text = "Proprietary" }

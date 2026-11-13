@@ -570,6 +570,20 @@ def test_three_devices_converge_whatever_the_order_of_edits_and_deliveries(
             lib.rename_collection(rng.choice(folders).id, rng.choice(folder_names) + rng.choice(["", " II"]))
         elif choice < 0.87 and folders:
             lib.delete_collection(rng.choice(folders).id)
+        elif choice < 0.93:  # supplementary files: add, relabel, remove
+            paper = rng.choice(papers)
+            existing = lib.attachments(paper.id)
+            if existing and rng.random() < 0.4:
+                target = rng.choice(existing)
+                if rng.random() < 0.5:
+                    lib.rename_supplement(target.id, f"label {rng.randrange(100)}")
+                else:
+                    lib.remove_supplement(target.id)
+            else:
+                source = tmp_path / "supp" / f"s{rng.randrange(10**9)}.dat"
+                source.parent.mkdir(exist_ok=True)
+                source.write_bytes(source.name.encode())
+                lib.add_supplement(paper.id, lib.prepare_attachment(source), mode="copy")
         elif folders:
             paper, folder = rng.choice(papers), rng.choice(folders)
             if rng.random() < 0.7:
@@ -594,6 +608,11 @@ def test_three_devices_converge_whatever_the_order_of_edits_and_deliveries(
     reference = snapshot(libs[0])
     for lib in libs[1:]:
         assert snapshot(lib) == reference
+    supplements = [sorted((a.uid, a.relative_path, a.label) for p in lib.papers() for a in lib.attachments(p.id)) for lib in libs]
+    assert supplements[0] == supplements[1] == supplements[2]
+    for lib in libs:
+        paths = [path.casefold() for _uid, path, _label in supplements[0]]
+        assert len(paths) == len(set(paths))  # no two supplementary files share a managed path
     for lib in libs:
         assert lib.sync.pull().waiting == 0
         keys = [p.citation_key.casefold() for p in lib.papers()]

@@ -668,6 +668,8 @@ def show_import_report(parent: QWidget | None, r: MendeleyImportReport) -> None:
         lines.append(f"{r.duplicates} were already in the library (folders and flags merged).")
     if r.attached_to_existing:
         lines.append(f"PDFs found for {r.attached_to_existing} of them that had none.")
+    if r.supplements:
+        lines.append(f"{r.supplements} further files attached as supplementary files.")
     if r.folders:
         lines.append(f"{r.folders} folders used or created.")
     elif r.total:
