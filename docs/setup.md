@@ -2,7 +2,7 @@
 
 This guide covers installation, the library folder, and keeping the library in a cloud-synchronised folder
 (Dropbox, Google Drive, OneDrive, Qsync, Syncthing) so that it is backed up and available on other computers.
-Menu names refer to JRef 0.7.
+Menu names refer to JRef 0.8.
 
 ## 1. Install
 
@@ -62,14 +62,19 @@ Useful settings (**Tools ▸ Preferences…**, `Ctrl+,`):
 - *When adding PDFs*: **move** them into the library (single copy, default) or **copy** them and leave the
   originals where they are.
 - *Inbox folder*: point your browser's download folder at it to import PDFs as you download them; duplicates
-  go to `inbox/Duplicates/`, nothing is deleted.
+  go to `inbox/Duplicates/`, nothing is deleted. Imports whose details could not be confirmed online (no DOI or
+  arXiv ID found, or only a title match) wait in the **Inbox** on the shelf until you mark them as verified
+  (`Ctrl+Return`).
 - *BibTeX*: extra words to keep capitalised in titles (`{...}` protection), on top of the built-in list.
 
-**Writing a project's `.bib` into your manuscript folder.** Right-click the project folder ▸ *BibTeX Export
-Settings…* ▸ *Also write to*, and choose e.g. `references.bib` next to your `.tex`. The copy in `bibtex/` is
-always kept as well. **Tools ▸ Synchronise .bib Files** (`F5`) rewrites every file on demand.
+**Writing a project's `.bib` into your manuscript folder.** Select the project ▸ **Project settings** (or
+right-click it on the shelf ▸ *Project Settings…*) ▸ *Also write to*, and choose e.g. `references.bib` next to
+your `.tex`. The copy in `bibtex/` is always kept as well. **Tools ▸ Rewrite .bib Files** (`F5`) rewrites every
+file on demand. Once a project writes next to a manuscript, its header shows the **manuscript check**: the keys
+cited in the `.tex` files of that folder, those missing from the project (*add them* adds the ones the library
+has) and the project entries never cited (*show* lists them).
 
-**Existing PDFs.** There is no need to copy a collection you already have. *File ▸ Import Mendeley Library…*
+**Existing PDFs.** There is no need to copy a collection you already have. *File ▸ Import from Mendeley…*
 builds the library from Mendeley's BibTeX export and links the PDFs where they are; *Tools ▸ Find Missing
 PDFs…* matches loose PDFs in a folder to entries without a file.
 
@@ -125,7 +130,7 @@ For a phone or tablet, see [ANDROID.md](../ANDROID.md).
 ### Good to know
 
 - **Settings that stay on each computer**: the *Also write to* path of every project `.bib`, the API keys of
-  Ask AI, the inbox settings. Set them on every computer.
+  Ask AI, the inbox settings, the saved searches. Set them on every computer.
 - **Linked PDFs outside the library folder** do not travel; the Share dialog tells you how many there are.
 - **The same paper added on two computers** before they synchronised: both entries are kept, JRef reports them,
   you delete one. Nothing is merged or deleted automatically.

@@ -38,6 +38,13 @@ REPO_CONFIG_PATH = Path(__file__).resolve().parents[2] / CONFIG_FILENAME
 DEFAULT_LIBRARY_ROOT = "~/JRefLibrary"
 DEFAULT_CONTACT_EMAIL = "user@example.com"
 IMPORT_MODES = ("move", "copy")
+SAVED_SEARCH_SORTS = ("", "added", "opened", "year", "title", "author", "key")
+# Saved searches offered to a new user (the shelf's "Saved searches"): name, query (core/query.py), sort.
+DEFAULT_SAVED_SEARCHES: tuple[tuple[str, str, str], ...] = (
+    ("No PDF yet", "-has:pdf", ""),
+    ("Authored by me", "is:mine", ""),
+    ("Recently read", "is:opened", "opened"),
+)
 
 
 def _user_config_base() -> Path:
@@ -130,6 +137,8 @@ class AppConfig:
     assistant_send_pdf: bool = False  # send the PDF file itself (figures, equations) where the provider reads PDFs
     assistant_supplements: bool = True  # include the text of supplementary PDFs
     assistant_acknowledged: tuple[str, ...] = ()  # providers whose data notice the user has accepted
+    # ---- saved searches of the desktop shelf: (name, query, sort); per user, not synchronised
+    saved_searches: tuple[tuple[str, str, str], ...] = DEFAULT_SAVED_SEARCHES
 
     def __post_init__(self) -> None:
         self.library_root = Path(self.library_root).expanduser()
@@ -141,6 +150,7 @@ class AppConfig:
         self.assistant_models = {str(k): str(v) for k, v in dict(self.assistant_models or {}).items()}
         self.assistant_base_urls = {str(k): str(v) for k, v in dict(self.assistant_base_urls or {}).items() if v}
         self.assistant_acknowledged = tuple(dict.fromkeys(str(p) for p in self.assistant_acknowledged or ()))
+        self.saved_searches = _saved_searches(self.saved_searches)
         self.assistant_max_chars = max(20_000, int(self.assistant_max_chars))
         self.assistant_max_tokens = max(256, int(self.assistant_max_tokens))
         if self.inbox_folder is not None and str(self.inbox_folder).strip():
@@ -203,6 +213,7 @@ class AppConfig:
             assistant_send_pdf=bool(assistant.get("send_pdf", False)),
             assistant_supplements=bool(assistant.get("supplements", True)),
             assistant_acknowledged=tuple(assistant.get("acknowledged") or ()),
+            saved_searches=_saved_searches_from_json(data.get("saved_searches")),
         )
 
     @classmethod
@@ -259,6 +270,7 @@ class AppConfig:
                 "supplements": self.assistant_supplements,
                 "acknowledged": list(self.assistant_acknowledged),
             },
+            "saved_searches": [{"name": n, "query": q, "sort": o} for n, q, o in self.saved_searches],
         }
 
     def save_user_settings(self, path: Path | None = None) -> Path:
@@ -269,6 +281,7 @@ class AppConfig:
         merged["extra_protected_words"] = list(self.extra_protected_words)  # lists are replaced, not merged
         merged["linked_path_map"] = dict(self.linked_path_map)  # so is the path map (entries can be removed)
         merged["assistant"] = self.user_settings()["assistant"]  # and the assistant block (dicts are replaced)
+        merged["saved_searches"] = self.user_settings()["saved_searches"]
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".config.", suffix=".json", dir=target.parent)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -293,6 +306,27 @@ def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str
         else:
             merged[key] = value
     return merged
+
+
+def _saved_searches(entries: Iterable[Any]) -> tuple[tuple[str, str, str], ...]:
+    """Normalise (name, query[, sort]) entries; drops nameless ones and unknown sort keys."""
+    out: list[tuple[str, str, str]] = []
+    for entry in entries or ():
+        name, query, *rest = (*tuple(entry), "")[:3]
+        name, query, sort = str(name).strip(), str(query).strip(), str(rest[0] if rest else "").strip()
+        if name:
+            out.append((name, query, sort if sort in SAVED_SEARCH_SORTS else ""))
+    return tuple(out)
+
+
+def _saved_searches_from_json(value: Any) -> tuple[tuple[str, str, str], ...]:
+    if value is None:  # never saved: offer the defaults
+        return DEFAULT_SAVED_SEARCHES
+    entries = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, Mapping):
+            entries.append((item.get("name", ""), item.get("query", ""), item.get("sort", "")))
+    return _saved_searches(entries)
 
 
 def _dedupe(words: Iterable[str]) -> tuple[str, ...]:

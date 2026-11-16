@@ -8,7 +8,8 @@ Syntax (terms are combined with AND; matching ignores case and accents)::
     journal:solids  in:"J. Mech"   publication (journal, proceedings, school...)
     year:2020  year:2015-2020  year:>=2018  year:<2000  year:2018-
     tag:review  kw:hydrogel  folder:thesis  type:book  key:anand_2023  doi:10.1016
-    is:favorite  is:unread  is:read  is:review  is:mine  has:pdf  has:notes  has:doi  has:supp
+    is:starred  is:unread  is:read  is:review  is:mine  is:opened
+    has:pdf  has:notes  has:doi  has:supp  has:project
     -tag:review  -author:smith  -word   exclusion
 
 A ``word:`` prefix that is not a known field (``http:``, ``10.1016/x:y``) is kept as plain text.
@@ -43,8 +44,9 @@ FIELDS: dict[str, tuple[str, ...]] = {
 }
 ALIASES = {alias: name for name, aliases in FIELDS.items() for alias in aliases}
 FLAGS = {
-    "is": {"favorite", "favourite", "fav", "starred", "read", "unread", "review", "mine", "linked"},
-    "has": {"pdf", "file", "notes", "note", "doi", "abstract", "tags", "tag", "supp", "supplement", "supplementary", "si"},
+    "is": {"favorite", "favourite", "fav", "starred", "read", "unread", "review", "mine", "linked", "opened"},
+    "has": {"pdf", "file", "notes", "note", "doi", "abstract", "tags", "tag", "supp", "supplement", "supplementary", "si",
+            "project", "folder"},
 }
 # Fields searched by free words in the "all fields" scope (full text is a separate scope, via FTS5).
 ALL_FIELDS = ("author", "title", "journal", "year", "tag", "keyword", "abstract", "notes", "key", "id", "publisher")
@@ -149,6 +151,7 @@ class SearchRecord:
 
 
 def build_record(paper: Paper, folders: Iterable[str] = ()) -> SearchRecord:
+    folders = list(folders)
     m = paper.meta
     authors = "; ".join(
         f"{a.family}, {a.given}".rstrip(", ") + (f" {a.given} {a.family}" if a.family and a.given else "")
@@ -186,6 +189,8 @@ def build_record(paper: Paper, folders: Iterable[str] = ()) -> SearchRecord:
         "abstract" if m.abstract.strip() else "",
         "tags" if split_list_field(paper.tags) else "",
         "supp" if paper.attachments else "",
+        "project" if any(folders) else "",
+        "opened" if paper.last_opened_at else "",
     }
     flags.discard("")
     all_text = " \n".join(folded[name] for name in ALL_FIELDS)
@@ -193,7 +198,8 @@ def build_record(paper: Paper, folders: Iterable[str] = ()) -> SearchRecord:
 
 
 _FLAG_SYNONYMS = {"favourite": "favorite", "fav": "favorite", "starred": "favorite", "file": "pdf", "note": "notes",
-                  "tag": "tags", "supplement": "supp", "supplementary": "supp", "si": "supp"}  # fmt: skip
+                  "tag": "tags", "supplement": "supp", "supplementary": "supp", "si": "supp",
+                  "folder": "project"}  # fmt: skip
 
 
 def _term_matches(term: Term, record: SearchRecord, scope: str) -> bool:
@@ -225,26 +231,27 @@ SCOPE_LABELS: Mapping[str, str] = {
     "all": "All fields",
     "author": "Authors",
     "title": "Title",
-    "journal": "Published in",
+    "journal": "Venue",
     "year": "Year",
-    "tag": "My tags",
+    "tag": "Tags",
     "keyword": "Author keywords",
     "abstract": "Abstract",
     "notes": "Notes",
     "key": "Citation key",
     "id": "Identifiers (DOI, arXiv, ISBN, PMID)",
-    "folder": "Folders",
+    "folder": "Projects",
 }
 
 SYNTAX_HELP = (
     ("author:anand", "authors containing “anand” (also au:)"),
     ('author:"van der giessen"', "a phrase inside one field"),
-    ("journal:solids", "published in (also in:, venue:)"),
+    ("venue:solids", "journal, proceedings, school (also journal:, in:)"),
     ("year:2020, year:2015-2020, year:>=2018", "year or range"),
     ("title:wrinkling", "title"),
     ("tag:review, kw:hydrogel", "your tags, author keywords"),
-    ("folder:thesis, type:book, key:anand", "folder, entry type, citation key"),
+    ("project:thesis, type:book, key:anand", "project, entry type, citation key"),
     ("doi:10.1016", "DOI, arXiv ID, ISBN, ISSN, PMID"),
-    ("is:favorite, is:unread, has:pdf", "flags (also is:read, is:review, has:notes)"),
+    ("is:starred, is:unread, has:pdf", "flags (also is:mine, is:opened, has:notes, has:supp)"),
+    ("-has:project", "in no project"),
     ("-tag:review, -smith", "exclude"),
 )

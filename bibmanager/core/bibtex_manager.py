@@ -16,7 +16,6 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-
 from .models import Collection, Paper
 from .storage import normalize_key_component
 

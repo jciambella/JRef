@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -344,10 +345,12 @@ class AssistantPanel(QWidget):
         self.model.currentTextChanged.connect(self._on_model_changed)
         top.addWidget(self.model, 3)
         self.refresh_button = QToolButton()
+        self.refresh_button.setObjectName("iconButton")
         self.refresh_button.setToolTip("Get the list of models from the provider")
         self.refresh_button.clicked.connect(self.refresh_models)
         top.addWidget(self.refresh_button)
         self.settings_button = QToolButton()
+        self.settings_button.setObjectName("iconButton")
         self.settings_button.setToolTip("API keys and options")
         self.settings_button.clicked.connect(self.open_settings)
         top.addWidget(self.settings_button)
@@ -362,6 +365,7 @@ class AssistantPanel(QWidget):
 
         self.transcript = QTextBrowser()
         self.transcript.setObjectName("assistantTranscript")
+        self.transcript.setFrameShape(QFrame.Shape.NoFrame)
         self.transcript.setOpenExternalLinks(True)
         layout.addWidget(self.transcript, 1)
 
@@ -395,6 +399,7 @@ class AssistantPanel(QWidget):
         self.clear_button.setToolTip("Start a new conversation about this document")
         self.clear_button.clicked.connect(self.new_conversation)
         self.web_button = QToolButton()
+        self.web_button.setObjectName("sortButton")  # themed like the other menu buttons
         self.web_button.setText("Ask in browser")
         self.web_button.setToolTip(
             "Use your ChatGPT / Claude / Gemini / Copilot subscription: the question is copied and the PDF is shown "

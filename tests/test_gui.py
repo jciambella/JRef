@@ -91,30 +91,33 @@ def _proxy_index(window: MainWindow, paper_id: int, col: Col) -> Any:
 
 
 # =========================================================================== layout
-def test_layout_mirrors_the_classic_three_pane_reference_manager(window: MainWindow) -> None:
+def test_layout_shelf_chips_rows_view_and_reference_sheet(window: MainWindow) -> None:
     root = window.tree.source.invisibleRootItem()
     names = [root.child(r).text() for r in range(root.rowCount())]
-    assert names[:9] == [
-        "Library", "All documents", "Recently added", "Recently read", "Favorites", "Needs review", "My publications",
-        "Unsorted", "Folders",
-    ]  # fmt: skip
-    assert names[-1] == "New folder"
-    assert window.command_labels == ["Add", "New folder", "Remove folder", "Sync"]
+    assert names[:3] == ["Inbox", "Library", "Projects"]
+    assert names[names.index("Saved searches") + 1 :] == ["No PDF yet", "Authored by me", "Recently read"]
+    assert "New project" in names
+    for mendeley_view in ("All documents", "Recently added", "Favorites", "Needs review", "My publications",
+                          "Unsorted", "Folders"):  # fmt: skip
+        assert mendeley_view not in names
     assert [a.text() for a in window.menuBar().actions()] == ["&File", "&Edit", "&View", "&Tools", "&Help"]
     header = window.table.horizontalHeader()
-    visible = [HEADERS[c] for c in Col if not header.isSectionHidden(int(c))]
-    assert visible == ["", "", "", "Authors", "Title", "Year", "Published in", "Added"]
-    assert [window.inspector.tabText(i) for i in range(window.inspector.count())] == ["Details", "Notes", "Contents", "Ask AI"]
-    combo = window.filter_pane.combo
-    assert [combo.itemText(i) for i in range(combo.count())] == [
-        "Filter by Authors", "Filter by Author Keywords", "Filter by My Tags", "Filter by Publications",
-    ]  # fmt: skip
-    assert window.list_title.text() == "All documents"
-    assert window.edit_settings.text() == "Edit settings"
+    assert window.view_mode == "rows" and header.isHidden()
+    assert [c for c in Col if not header.isSectionHidden(int(c))] == [Col.REFERENCE]
+    window.set_view_mode("table")
+    visible = [Col(header.logicalIndex(v)) for v in range(header.count())]
+    visible = [HEADERS[c] for c in visible if not header.isSectionHidden(int(c))]
+    assert visible == ["Key", "Title", "Authors", "Year", "Venue", "Added", "", ""]
+    assert [chip.text() for chip in window.filters.toggles.values()] == ["Starred", "Unread", "Has PDF", "In no project"]
+    assert window.list_title.text() == "Library" and window.breadcrumb.text() == "<b>Library</b>"
+    assert window.inspector.study_button.text() == "Study and ask AI"
     assert not window.table.empty_state.isHidden()  # empty library -> call to action
+    assert window.import_button.defaultAction().text() == "Import PDFs"
 
 
-def test_special_views_and_project_folders(window: MainWindow, library: Library, make_pdf: Callable[..., Path]) -> None:
+def test_inbox_library_projects_saved_searches_and_chips(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path]
+) -> None:
     folder = library.create_collection("Viscoelastic fracture")
     in_folder = _ingest(library, make_pdf, "Anand", year=2023, collection_id=folder.id)
     loose = _ingest(library, make_pdf, "Rossi", year=2021)
@@ -122,19 +125,189 @@ def test_special_views_and_project_folders(window: MainWindow, library: Library,
     library.update_flags(loose, favorite=True, my_publication=True)
     window.reload_tree()
 
-    def shown(kind: NodeKind, cid: int | None = None) -> set[int]:
-        window.tree.select_node(kind, cid)
-        QApplication.processEvents()
-        return {window.model.paper(r).id for r in range(window.model.rowCount())}
+    def shown(kind: NodeKind | None = None, cid: int | None = None) -> set[int]:
+        if kind is not None:
+            window.tree.select_node(kind, cid)
+            QApplication.processEvents()
+        return {window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())}
 
     assert shown(NodeKind.ALL) == {in_folder, loose, review}
     assert shown(NodeKind.FOLDER, folder.id) == {in_folder}
-    assert window.list_title.text() == "Viscoelastic fracture"
-    assert shown(NodeKind.UNSORTED) == {loose, review}
-    assert shown(NodeKind.FAVORITES) == {loose}
-    assert shown(NodeKind.MINE) == {loose}
-    assert shown(NodeKind.REVIEW) == {review}
-    assert shown(NodeKind.RECENT_ADDED) == {in_folder, loose, review}
+    assert window.list_title.text() == "Viscoelastic fracture" and "Projects" in window.breadcrumb.text()
+    assert "viscoelastic_fracture.bib" in window.list_subtitle.text()
+    assert shown(NodeKind.INBOX) == {review} and window.verify_all_button.isVisibleTo(window)
+    assert shown(NodeKind.SAVED, 1) == {loose}  # Authored by me
+    assert shown(NodeKind.SAVED, 0) == set()  # No PDF yet
+    assert window.list_title.text() == "No PDF yet"
+
+    assert shown(NodeKind.ALL) == {in_folder, loose, review}
+    window.filters.set_toggle("is:starred", True)
+    assert shown() == {loose} and window.filters.clear_link.isVisibleTo(window)
+    window.filters.set_toggle("is:starred", False)
+    window.filters.set_toggle("-has:project", True)
+    assert shown() == {loose, review}
+    window.filters.clear()
+    window.filters.set_year("2023", "year:2023")
+    assert shown() == {in_folder} and window.filters.year_chip.text() == "Year: 2023"
+    window.filters.clear()
+    window.filters.set_facet("authors", "Rossi, J.")
+    assert shown() == {loose} and window.filters.facet_chips["authors"].text() == "Author: Rossi, J."
+    window.filters.clear()
+    assert shown() == {in_folder, loose, review} and not window.filters.active()
+
+
+def test_saved_search_from_the_search_box_and_chips(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = _ingest(library, make_pdf, "Anand", year=2015)
+    b = _ingest(library, make_pdf, "Anand", "Gurtin", year=2021)
+    library.update_flags(b, favorite=True)
+    window.reload_view()
+    window.search.setText("author:anand")
+    window._apply_search()
+    window.filters.set_toggle("is:starred", True)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kw: ("Starred Anand", True))
+    window.save_current_search()
+    name, query, _sort = library.config.saved_searches[-1]
+    assert (name, query) == ("Starred Anand", "author:anand is:starred")
+    assert window.node == (NodeKind.SAVED, len(library.config.saved_searches) - 1)
+    window.search.clear()
+    window.filters.clear()
+    window._apply_search()
+    assert {window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())} == {b}
+    saved = json.loads(window.user_config.read_text(encoding="utf-8"))["saved_searches"]
+    assert saved[-1] == {"name": "Starred Anand", "query": "author:anand is:starred", "sort": window.sort_key}
+    window.remove_saved_search(len(library.config.saved_searches) - 1)
+    assert all(n != "Starred Anand" for n, _q, _s in library.config.saved_searches)
+    assert a in {p.id for p in library.papers()}
+
+
+def test_rows_view_star_glyph_sort_menu_and_command_palette(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path]
+) -> None:
+    old = _ingest(library, make_pdf, "Simo", year=1987)
+    new = _ingest(library, make_pdf, "Anand", year=2023)
+    window.reload_view()
+    window.table.reference_delegate.starClicked.emit(old)
+    assert library.get_paper(old).favorite
+    window.set_sort("year")
+    order = [window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())]
+    assert order == [new, old] and window.table.reference_delegate.year_gutter
+    assert window.filters.sort_button.text() == "Sort: Year, newest first"
+    window.set_sort("year_asc")
+    assert [window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())] == [old, new]
+    window.set_view_mode("table")
+    assert not window.table.reference_delegate.year_gutter and not window.table.horizontalHeader().isHidden()
+    window.set_view_mode("rows")
+
+    _select(window, new)
+    window.search.setText(">copy bib")
+    assert window.completer.completionCount() >= 1
+    assert window.run_command("Copy BibTeX Entry") and window.search.text() == ""
+    assert QGuiApplication.clipboard().text().startswith("@article{Anand_2023")
+    assert not window.run_command("No such thing")
+
+
+def test_reference_sheet_cite_block_and_project_chips(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path]
+) -> None:
+    thesis = library.create_collection("PhD thesis")
+    draft = library.create_collection("Draft")
+    pid = _ingest(library, make_pdf, "Rossi", year=2021, title="Mullins effect in PINNs", collection_id=thesis.id)
+    window.reload_tree(select=(NodeKind.FOLDER, thesis.id))
+    _select(window, pid)
+    details = window.inspector.details
+    assert details.cite_code.text() == "\\cite{Rossi_2021}"
+    details.cite_group.button(1).click()
+    assert details.cite_code.text() == "\\citep{Rossi_2021}"
+    details.copy_citation()
+    assert QGuiApplication.clipboard().text() == "\\citep{Rossi_2021}"
+    assert "{Mullins}" in details.bibtex_view.text() and "phd_thesis.bib" in details.bib_caption.text()
+    assert [a.text().strip() for a in details.project_menu.actions() if a.isEnabled()][:1] == ["Draft"]
+
+    window.inspector.projectToggled.emit(draft.id, True)
+    assert {c.id for c in library.collections_of(pid)} == {thesis.id, draft.id}
+    assert "Rossi_2021" in bib_entries(library.bib.collection_path(draft.slug))
+    window.inspector.projectToggled.emit(thesis.id, False)
+    assert [c.id for c in library.collections_of(pid)] == [draft.id]
+    assert window.model.rowCount() == 0  # it left the project being shown
+    assert window.list_subtitle.text().startswith("0 references")
+
+
+def test_manuscript_check_compares_cited_keys_with_the_project(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path], tmp_path: Path
+) -> None:
+    project = library.create_collection("Viscoelastic fracture")
+    cited = _ingest(library, make_pdf, "Simo", year=1987, collection_id=project.id)
+    uncited = _ingest(library, make_pdf, "Gent", year=1996, collection_id=project.id)
+    elsewhere = _ingest(library, make_pdf, "Reese", "Govindjee", year=1998)
+    manuscript = tmp_path / "paper"
+    manuscript.mkdir()
+    (manuscript / "main.tex").write_text(
+        "% \\cite{Commented_2000}\n\\cite{Simo_1987} and \\citep[p.~3]{Reese_Govindjee_1998, Missing_2001}\n",
+        encoding="utf-8",
+    )
+    library.set_collection_export_path(project.id, str(manuscript / "refs.bib"))
+    window.reload_tree(select=(NodeKind.FOLDER, project.id))
+    window.runner.wait_idle()
+    QApplication.processEvents()
+    check = window.manuscript
+    assert check is not None and check.cited == {"Simo_1987", "Reese_Govindjee_1998", "Missing_2001"}
+    assert check.missing == ["Missing_2001", "Reese_Govindjee_1998"] and check.missing_in_library == ["Reese_Govindjee_1998"]
+    assert check.unused == ["Gent_1996"]
+    assert window.header.check.isVisibleTo(window) and window.header.missing.number.text() == "2"
+    assert "main.tex" in window.header.cited.text.text()
+
+    window.show_uncited()
+    assert {window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())} == {uncited}
+    assert window.filters.restrict_chip.isVisibleTo(window)
+    window.filters.restrict_chip.click()
+    assert window.proxy.rowCount() == 2
+
+    window.add_missing_citations()
+    window.runner.wait_idle()
+    QApplication.processEvents()
+    assert {p.id for p in library.papers(project.id)} == {cited, uncited, elsewhere}
+    assert window.manuscript is not None and window.manuscript.missing == ["Missing_2001"]
+
+
+def test_inbox_triage_marks_verified_and_moves_to_the_next(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = library.ingest_pdf(make_pdf("a.pdf"), metadata=meta("Anand", year=2020, doi="10.1/abc")).paper.id
+    second = library.ingest_pdf(make_pdf("b.pdf"), metadata=meta("Rossi", year=2021)).paper.id
+    third = library.ingest_pdf(make_pdf("c.pdf"), metadata=meta("Bianchi", year=2022)).paper.id
+    for pid in (first, second, third):
+        library.update_metadata(pid, needs_review=True)
+    window.reload_tree(select=(NodeKind.INBOX, None))
+    window.set_sort("year_asc")
+    _select(window, first)
+    assert not window.inspector.details.verify.isHidden()
+    assert "DOI" in window.inspector.details.verify_text.text()
+    window.act_verify.trigger()
+    assert not library.get_paper(first).needs_review
+    assert window.selected_ids() == [second] and window.model.rowCount() == 2
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    library.update_metadata(third, doi="10.1/xyz")
+    window.verify_all_with_doi()
+    assert [p.id for p in library.papers_needing_review()] == [second]
+
+
+def test_study_mode_shares_the_notes_with_the_sheet(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path]
+) -> None:
+    pid = _ingest(library, make_pdf, "Reese", "Govindjee", year=1998)
+    window.reload_view()
+    _select(window, pid)
+    window.act_study.trigger()
+    assert window.pages.currentIndex() == 1 and window.study.paper is not None and window.study.paper.id == pid
+    assert window.study.key_badge.text() == "Reese_Govindjee_1998"
+    window.study.editor.setPlainText("Evolution law valid far from equilibrium.")
+    window.study.flush_notes()
+    assert library.get_paper(pid).notes == "Evolution law valid far from equilibrium."
+    window.exit_study()
+    assert window.pages.currentIndex() == 0
+    assert window.inspector.notes.toPlainText() == "Evolution law valid far from equilibrium."
 
 
 # =========================================================================== drag & drop
@@ -156,10 +329,8 @@ def test_dragging_documents_onto_a_folder_links_them_without_copying(
     assert pdfs_on_disk(library.root) == ["pdfs/2023/Anand_2023.pdf"]
     assert "Anand_2023" in bib_entries(library.bib.collection_path(folder.slug))
 
-    favorites = window.tree.find_index(NodeKind.FAVORITES)
-    model.dropMimeData(mime, Qt.DropAction.CopyAction, -1, -1, favorites)
-    assert library.get_paper(pid).favorite
-    assert not model.canDropMimeData(mime, Qt.DropAction.CopyAction, -1, -1, window.tree.find_index(NodeKind.REVIEW))
+    assert not model.canDropMimeData(mime, Qt.DropAction.CopyAction, -1, -1, window.tree.find_index(NodeKind.INBOX))
+    assert not model.canDropMimeData(mime, Qt.DropAction.CopyAction, -1, -1, window.tree.find_index(NodeKind.ALL))
 
 
 def test_dropping_pdf_files_imports_them_in_the_background(
@@ -242,20 +413,20 @@ def test_inspector_edits_rename_the_pdf_and_rewrite_the_bib(
     assert library.get_paper(pid).notes == "Check eq. (12) against the FE results."
 
 
-def test_needs_review_banner_and_mark_reviewed(
+def test_verify_card_disappears_once_the_details_are_fixed(
     window: MainWindow, library: Library, make_pdf: Callable[..., Path]
 ) -> None:
     pid = library.ingest_pdf(make_pdf("scan.pdf"), metadata=PaperMetadata(title="Unknown scan")).paper.id
     window.reload_view()
     _select(window, pid)
-    assert not window.inspector.details.banner.isHidden()
+    assert not window.inspector.details.verify.isHidden()
     window.inspector.details.authors.setPlainText("Lancioni, Giovanni")
     window.inspector.details.authors._commit()
     window.inspector.details.year.setText("2025")
     window.inspector.details.year.editingFinished.emit()
     paper = library.get_paper(pid)
     assert paper.citation_key == "Lancioni_2025" and not paper.needs_review
-    assert window.inspector.details.banner.isHidden()
+    assert window.inspector.details.verify.isHidden()
 
 
 def test_contents_tab_shows_the_pdf_outline(window: MainWindow, library: Library, tmp_path: Path) -> None:
@@ -333,13 +504,11 @@ def test_metadata_search_fulltext_search_and_author_filter(
     assert window.proxy.rowCount() == 0  # body text is not document metadata
     window.set_search_mode(SEARCH_FULLTEXT)
     assert [window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())] == [rubber]
-    assert window.count_label.text() == "1 of 2 documents"
+    assert window.count_label.text() == "1 of 2 references"
 
     window.search.clear()
     window._apply_search()
-    pane = window.filter_pane
-    item = pane.list.findItems("Bianchi, J.", Qt.MatchFlag.MatchExactly)[0]
-    pane.list.setCurrentItem(item)
+    window.filters.set_facet("authors", "Bianchi, J.")
     assert [window.proxy.index(r, 0).data(PAPER_ID_ROLE) for r in range(window.proxy.rowCount())] == [bridge]
 
 
@@ -387,6 +556,8 @@ def test_layout_settings_persist_between_sessions(
     settings = tmp_path / "persist.ini"
     first = _make_window(qapp, library, settings)
     first.reload_tree(select=(NodeKind.FOLDER, collection.id))
+    first.set_view_mode("table")
+    first.set_sort("title")
     first.table.horizontalHeader().setSectionHidden(int(Col.PUBLISHED_IN), True)
     first.table.horizontalHeader().setSectionHidden(int(Col.CITATION_KEY), False)
     first.set_search_mode(SEARCH_FULLTEXT)
@@ -399,6 +570,7 @@ def test_layout_settings_persist_between_sessions(
         assert not header.isSectionHidden(int(Col.CITATION_KEY))
         assert second.node == (NodeKind.FOLDER, collection.id)
         assert second.search_mode == SEARCH_FULLTEXT
+        assert second.view_mode == "table" and second.sort_key == "title"
     finally:
         second.close()
 
@@ -426,7 +598,7 @@ def test_navigation_shows_counts(window: MainWindow, library: Library, make_pdf:
     library.ingest_pdf(make_pdf("scan.pdf"), metadata=PaperMetadata())
     window.reload_tree()
     assert window.tree.find_index(NodeKind.ALL).data(COUNT_ROLE) == 2
-    assert window.tree.find_index(NodeKind.REVIEW).data(COUNT_ROLE) == 1
+    assert window.tree.find_index(NodeKind.INBOX).data(COUNT_ROLE) == 1
     assert window.tree.find_index(NodeKind.FOLDER, folder.id).data(COUNT_ROLE) == 1
     assert window.table.empty_state.isHidden()
 
@@ -606,7 +778,7 @@ def test_mendeley_dialog_builds_import_options(qapp: QApplication, tmp_path: Pat
     assert dialog.bib_folders() == {library_bib: "", thesis: "Thesis"}
     assert dialog.table.item(1, dialog.COL_ENTRIES).text() == "1"
     assert dialog.table.item(1, dialog.COL_FILES).text() == "1"
-    assert "none in a Mendeley folder" not in dialog.hint.text() and "1 file folder" in dialog.hint.text()
+    assert "none in a Mendeley folder" not in dialog.hint.text() and "1 project(s) from files" in dialog.hint.text()
     dialog.table.item(1, dialog.COL_FOLDER).setText("PhD thesis")
     dialog.pdf_folder.setText(str(tmp_path))
     dialog.database.setText("")
@@ -649,7 +821,7 @@ def test_window_title_and_about_use_the_new_name(window: MainWindow, monkeypatch
     shown: list[str] = []
     monkeypatch.setattr(QMessageBox, "exec", lambda box: shown.append(box.windowTitle() + "|" + box.text()) or 0)
     window.show_help()
-    assert shown and shown[0].startswith("About JRef|<h3>JRef 0.7.0</h3><p><b>Journal Reference Manager</b>")
+    assert shown and shown[0].startswith("About JRef|<h3>JRef 0.8.0</h3><p><b>Journal Reference Manager</b>")
     assert "Author: JC" in shown[0] and "j.c@outlook.com" in shown[0]
 
 
@@ -761,7 +933,7 @@ def test_sharing_dialog_moves_the_library_to_the_pdf_folder_and_changes_of_a_pho
     ref = library.commit_reference(ReferenceCandidate("Gent1996", meta("Gent", year=1996))).paper
     library.attach_pdf(ref.id, library.prepare_attachment(linked), mode="link")
     window = _make_window(qapp, library, tmp_path / "gui.ini")
-    assert window.device_label.text() == "" and not window.act_sync_devices.isEnabled()
+    assert window.device_label.text() == "Not shared with other devices" and not window.act_sync_devices.isEnabled()
 
     dialog = DeviceSyncDialog(window, library)
     assert "1 linked PDFs are outside the library folder" in dialog.hint.text()
@@ -875,7 +1047,8 @@ def test_ask_ai_panel_streams_an_answer_and_saves_it_to_the_notes(
     pid = _ingest(library, make_pdf, "Anand", year=2012, lines=["We assume incompressibility, J = 1."])
     window.reload_view()
     window.select_ids([pid])
-    panel = window.inspector.assistant
+    window.enter_study()
+    panel = window.study.assistant
     assert panel.paper is not None and panel.paper.id == pid
     assert "No API key for Claude" in panel.info.text()
 
@@ -925,6 +1098,8 @@ def test_ask_ai_panel_streams_an_answer_and_saves_it_to_the_notes(
     panel.save_to_notes()
     notes = library.get_paper(pid).notes
     assert "Ask AI" in notes and "Q: And the boundary conditions?" in notes and "$J = 1$" in notes
+    assert window.study.editor.toPlainText() == notes
+    window.exit_study()
     assert window.inspector.notes.toPlainText() == notes
 
     launched: list[str] = []

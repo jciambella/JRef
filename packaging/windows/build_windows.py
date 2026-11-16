@@ -141,6 +141,8 @@ def write_licenses(stage: Path) -> None:
         "Licence texts are in python\\LICENSE_PYTHON.txt and in each package's *.dist-info folder.",
         "",
         "Python (conda-forge build)        PSF-2.0",
+        "Source Serif 4 (Adobe)            OFL-1.1  (app\\bibmanager\\gui\\fonts\\OFL-SourceSerif4.txt)",
+        "JetBrains Mono (JetBrains)        OFL-1.1  (app\\bibmanager\\gui\\fonts\\OFL-JetBrainsMono.txt)",
     ]
     parser = email.parser.Parser()
     for meta in sorted(site.glob("*.dist-info/METADATA")):
@@ -164,7 +166,7 @@ ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
 def render_icon(target: Path) -> None:
-    """Multi-resolution .ico of the simplified mark, drawn by ``bibmanager.gui.icons.paint_app_icon``."""
+    """Multi-resolution .ico of the logo, drawn by ``bibmanager.gui.icons.paint_app_icon``."""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     sys.path.insert(0, str(REPO))
     from PIL import Image

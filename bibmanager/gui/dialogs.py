@@ -64,7 +64,7 @@ def _buttons(accept_text: str) -> QDialogButtonBox:
 
 
 class ViewSettingsDialog(QDialog):
-    """ "Edit Settings": visible columns, and for a project folder its ``.bib`` export target."""
+    """Project settings: the columns of the table view and, for a project, its second ``.bib`` copy."""
 
     def __init__(
         self,
@@ -76,11 +76,11 @@ class ViewSettingsDialog(QDialog):
         internal_bib: Path | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"View settings — {title}")
+        self.setWindowTitle(f"Settings — {title}")
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
 
-        columns = QGroupBox("Columns shown in the document list")
+        columns = QGroupBox("Columns of the table view")
         grid = QGridLayout(columns)
         self.checks: dict[int, QCheckBox] = {}
         for i, col in enumerate(Col):
@@ -172,7 +172,7 @@ class PreferencesDialog(QDialog):
                 f"<h2 style='margin:0'>Welcome to {APP_NAME}</h2>"
                 f"<p style='margin-top:2px'><i>{APP_SUBTITLE}</i></p>"
                 f"<p>Choose where your library lives. {APP_NAME} keeps every PDF once in "
-                "<code>pdfs/&lt;year&gt;/</code> and writes one <code>.bib</code> file per folder in "
+                "<code>pdfs/&lt;year&gt;/</code> and writes one <code>.bib</code> file per project in "
                 "<code>bibtex/</code> inside this location.</p>"
             )
             intro.setWordWrap(True)
@@ -326,9 +326,9 @@ class MendeleyImportDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 14)
         layout.setSpacing(10)
         intro = QLabel(
-            "Builds the library from Mendeley's BibTeX export. Folders come from <code>mendeley-groups</code> "
+            "Builds the library from Mendeley's BibTeX export. Projects come from <code>mendeley-groups</code> "
             "or, with Mendeley's one-file-per-folder export, from the files ticked below. Running the import "
-            "again only adds what is new (folders and PDFs are added to entries already imported)."
+            "again only adds what is new (projects and PDFs are added to entries already imported)."
         )
         intro.setWordWrap(True)
         intro.setTextFormat(Qt.TextFormat.RichText)
@@ -338,7 +338,7 @@ class MendeleyImportDialog(QDialog):
         sv = QVBoxLayout(source)
         sv.setSpacing(4)
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Folder", "File", "Entries", "In Mendeley folders", "With PDF path"])
+        self.table.setHorizontalHeaderLabels(["Project", "File", "Entries", "In Mendeley folders", "With PDF path"])
         self.table.verticalHeader().hide()
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(
@@ -420,15 +420,15 @@ class MendeleyImportDialog(QDialog):
 
         more = QGroupBox("Options")
         mv = QGridLayout(more)
-        self.groups = QCheckBox("Create folders from mendeley-groups")
+        self.groups = QCheckBox("Create projects from mendeley-groups")
         self.groups.setChecked(True)
         self.notes = QCheckBox("Import notes (annote) and tags")
         self.notes.setChecked(True)
         self.fulltext = QCheckBox("Index the full text of the PDFs (slower)")
         self.fulltext.setChecked(True)
-        self.take_over = QCheckBox("Keep writing each ticked folder to its .bib file")
+        self.take_over = QCheckBox("Keep writing each ticked project to its .bib file")
         self.take_over.setToolTip(
-            "Manuscripts that use these .bib files keep compiling: the folder's BibTeX is written back to the "
+            "Manuscripts that use these .bib files keep compiling: the project's BibTeX is written back to the "
             "same file from now on (Mendeley should no longer sync it)."
         )
         mv.addWidget(self.groups, 0, 0)
@@ -457,7 +457,7 @@ class MendeleyImportDialog(QDialog):
             self.add_bib_files([Path(p) for p in paths])
 
     def add_bib_files(self, paths: list[Path]) -> None:
-        """Add files to the table with their summary; several files default to one folder per file."""
+        """Add files to the table with their summary; several files default to one project per file."""
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             for path in paths:
@@ -478,7 +478,7 @@ class MendeleyImportDialog(QDialog):
             folder.setCheckState(
                 Qt.CheckState.Checked if suggest_bib_folder(path, len(all_paths)) else Qt.CheckState.Unchecked
             )
-            folder.setToolTip("Tick to put every entry of this file into a folder with this name (editable)")
+            folder.setToolTip("Tick to put every entry of this file into a project with this name (editable)")
             folder.setData(Qt.ItemDataRole.UserRole, str(path))
             self.table.setItem(r, self.COL_FOLDER, folder)
             name = QTableWidgetItem(path.name)
@@ -526,14 +526,14 @@ class MendeleyImportDialog(QDialog):
         if not summaries:
             text = "Add one or more .bib files exported by Mendeley."
         elif grouped == 0 and ticked == 0:
-            text = f"{entries} entries, none in a Mendeley folder: tick files to create folders."
+            text = f"{entries} entries, none in a Mendeley folder: tick files to create projects."
         else:
             groups = len({g for s in summaries for g in s.groups})
             parts = [f"{entries} entries"]
             if grouped:
                 parts.append(f"{groups} Mendeley folder(s)")
             if ticked:
-                parts.append(f"{ticked} file folder(s)")
+                parts.append(f"{ticked} project(s) from files")
             text = "; ".join(parts) + "."
         self.hint.setText(text)
         self.take_over.setEnabled(ticked > 0)
@@ -590,7 +590,7 @@ class FindPdfsDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 14)
         layout.setSpacing(10)
         intro = QLabel(
-            f"{missing} document(s) have no PDF. The folder below (and its sub-folders) is searched for the "
+            f"{missing} reference(s) have no PDF. The folder below (and its sub-folders) is searched for the "
             "file name Mendeley recorded, a file named after the citation key, or a Mendeley-style name "
             "<i>Authors - Year - Title.pdf</i> matching the title and year. Ambiguous matches are listed, "
             "never guessed."
@@ -713,14 +713,17 @@ def confirm_naming_rule(parent: QWidget | None, outdated: list[tuple[Paper, str]
 
 
 SHORTCUTS = (
-    ("Ctrl+O", "Add files"),
-    ("Ctrl+F", "Search"),
-    ("Ctrl+Shift+C", r"Copy \cite{...} for the selected documents"),
+    ("Ctrl+K", "Search, or type > to run a command"),
+    ("Ctrl+O", "Import PDFs"),
+    ("Ctrl+Shift+C", r"Copy \cite{...} for the selected references"),
     ("Ctrl+Shift+B", "Copy BibTeX entries"),
     ("Enter / double-click", "Open PDF"),
-    ("Delete", "Delete documents from the library"),
-    ("F2", "Rename folder"),
-    ("F5", "Synchronise .bib files"),
+    ("Ctrl+J", "Study and ask AI (Esc returns)"),
+    ("Ctrl+Return", "Mark as verified (Inbox)"),
+    ("Ctrl+1 / Ctrl+2", "Rows view / table view"),
+    ("Delete", "Delete references from the library"),
+    ("F2", "Rename project"),
+    ("F5", "Rewrite .bib files"),
     ("F6", "Synchronise with the other devices"),
     ("Ctrl+,", "Preferences"),
 )

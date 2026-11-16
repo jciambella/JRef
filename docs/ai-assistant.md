@@ -1,9 +1,10 @@
 # Ask AI: connecting a language model
 
-The **Ask AI** tab next to *Details*, *Notes* and *Contents* answers questions about the selected paper. JRef
-sends the paper's text (with page markers) or, if you allow it, the PDF file itself, together with the text of
-its supplementary PDFs, to the provider you choose; the answer streams into the panel, you can ask follow-up
-questions and **Save to Notes** appends the exchange to the paper's notes.
+**Study mode** (select a reference ▸ **Study and ask AI** at the bottom of the reference sheet, or `Ctrl+J`;
+`Esc` returns) shows the paper's notes on the left and **Ask AI** on the right. JRef sends the paper's text (with
+page markers) or, if you allow it, the PDF file itself, together with the text of its supplementary PDFs, to the
+provider you choose; the answer streams into the panel, you can ask follow-up questions and **Save to Notes**
+appends the exchange to the paper's notes.
 
 ## Before you start: API use is billed separately
 
@@ -25,8 +26,8 @@ and nothing leaves your computer.
 4. **Create the key** at <https://platform.openai.com/api-keys>, in the project of step 3. The default
    permission (*All*) works with JRef, which only lists models and sends chat requests. Copy the key and keep
    it private: anyone holding it can spend your credit.
-5. **Enter it in JRef.** Select a paper ▸ **Ask AI** tab ▸ gear button (*API keys and options*) ▸ *Provider*:
-   **ChatGPT models (OpenAI)** ▸ paste the key into *API key* ▸ **Save**.
+5. **Enter it in JRef.** Select a paper ▸ **Study and ask AI** (`Ctrl+J`) ▸ gear button next to the model box
+   (*API keys and options*) ▸ *Provider*: **ChatGPT models (OpenAI)** ▸ paste the key into *API key* ▸ **Save**.
 6. **Choose a model.** Press the refresh button next to the model box: JRef fetches the list of models your key
    can use. Pick one, or type a model name.
 7. **Ask.** Before the first question to a cloud provider JRef shows, once, what will be sent and where. Answer

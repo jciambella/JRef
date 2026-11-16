@@ -3,7 +3,7 @@
 The import package keeps its historical name ``bibmanager``; the product name is ``APP_NAME``.
 """
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 APP_NAME = "JRef"
 APP_SUBTITLE = "Journal Reference Manager"

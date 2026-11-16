@@ -22,7 +22,20 @@ inside the folder of the manuscript you are writing.
   Mendeley import that leaves your PDFs where they are.
 - **Several devices** (PCs and an Android app) share one library through any synchronised folder — Dropbox,
   Google Drive, OneDrive, Qsync, Syncthing — using per-device change journals instead of a shared database.
-- **Ask AI** about a paper with your own API key (OpenAI, Anthropic, Google) or a local model (Ollama).
+- **Manuscript check.** A project whose `.bib` is also written next to a manuscript compares the keys its `.tex`
+  files cite with the project: cited but missing (one click adds those the library has), and never cited.
+- **Ask AI** about a paper in Study mode, with your own API key (OpenAI, Anthropic, Google) or a local model (Ollama).
+
+## The window
+
+![JRef 0.8: shelf, project header with the manuscript check, filter chips, rows view and reference sheet](docs/images/jref-0.8-workspace.png)
+
+The navy **shelf** on the left holds the **Inbox** (imports whose details still need a check), the **Library**,
+your **projects** (each with the state of its `.bib` file) and your **saved searches**. Above the list, **chips**
+filter by star, read state, PDF, project, year, author, venue and tag; the list shows one reference per row with
+its citation key first (or a classic **table**, `Ctrl+2`). The **reference sheet** on the right edits the details
+and shows the `\cite` command and the exact BibTeX entry. `Ctrl+K` searches, or runs a command when you type `>`
+first; `Ctrl+J` opens **Study mode** (notes and Ask AI for one paper).
 
 ## Quick start
 

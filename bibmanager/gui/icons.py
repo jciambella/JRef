@@ -1,8 +1,9 @@
 """Monoline icons in the spirit of Fluent System Icons, drawn with QPainter at run time, plus the app logo.
 
-UI icons use no image assets and no third-party artwork. The application icon is the JRef logo
-supplied by the author; its simplified mark (``paint_app_icon``) is the window/taskbar/.ico icon, and the full
-artwork (``assets/jref_*.png``, from ``packaging/branding/make_icons.py``) appears in About and Welcome.
+UI icons use no image assets and no third-party artwork. The application icon is the JRef logo ("ribbon J",
+``packaging/branding/jref_logo_ribbon.svg``) drawn as vectors by ``paint_app_icon`` (window, taskbar, .ico); the
+tile with the lettering (``assets/jref_*.png``, from ``packaging/branding/make_icons.py``) appears in About and
+Welcome.
 Each UI icon is drawn on a 24-unit grid and rendered at
 16/20/24/32 px (2x device-pixel ratio), so strokes stay crisp at every size. Colours follow the
 active theme: ``set_theme`` clears the caches and the window re-applies its icons.
@@ -573,64 +574,296 @@ def empty_library() -> QIcon:
     return _icon(draw)
 
 
+# --------------------------------------------------------------------------- shelf and new views
+_SHELF_INK = QColor("#e8ecf2")
+_SHELF_MUTED = QColor("#9aa7ba")
+_AMBER = QColor("#e9ad43")
+
+
+@themed
+def inbox(on_shelf: bool = True) -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _SHELF_INK if on_shelf else _ink, 1.6)
+        tray = QPainterPath()
+        tray.moveTo(3.5, 13)
+        tray.lineTo(8.5, 13)
+        tray.lineTo(10, 16)
+        tray.lineTo(14, 16)
+        tray.lineTo(15.5, 13)
+        tray.lineTo(20.5, 13)
+        p.drawPath(tray)
+        box = QPainterPath()
+        box.moveTo(6, 5)
+        box.lineTo(18, 5)
+        box.lineTo(20.5, 13)
+        box.lineTo(20.5, 18.5)
+        box.quadTo(20.5, 19.5, 19.5, 19.5)
+        box.lineTo(4.5, 19.5)
+        box.quadTo(3.5, 19.5, 3.5, 18.5)
+        box.lineTo(3.5, 13)
+        box.closeSubpath()
+        p.drawPath(box)
+
+    return _icon(draw)
+
+
+@themed
+def library(on_shelf: bool = True) -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _SHELF_INK if on_shelf else _ink, 1.6)
+        p.drawRoundedRect(QRectF(4.5, 4.5, 4, 15), 0.8, 0.8)
+        p.drawRoundedRect(QRectF(10.5, 4.5, 4, 15), 0.8, 0.8)
+        p.save()
+        p.translate(17.8, 19.2)
+        p.rotate(-14)
+        p.drawRoundedRect(QRectF(-1.8, -14.6, 3.6, 14.6), 0.8, 0.8)
+        p.restore()
+
+    return _icon(draw)
+
+
+@themed
+def project(on_shelf: bool = True) -> QIcon:
+    """A project = one .bib file: a pair of braces in the brand amber."""
+
+    def draw(p: QPainter) -> None:
+        _stroke(p, _AMBER if on_shelf else _ink, 1.7)
+        for mirror in (False, True):
+            def x(v: float, m: bool = mirror) -> float:
+                return 24 - v if m else v
+
+            path = QPainterPath(QPointF(x(10.5), 4.5))
+            path.cubicTo(x(8.6), 4.5, x(8.4), 5.6, x(8.4), 8)
+            path.lineTo(x(8.4), 10)
+            path.cubicTo(x(8.4), 11.4, x(7.8), 12, x(6.2), 12)
+            path.cubicTo(x(7.8), 12, x(8.4), 12.6, x(8.4), 14)
+            path.lineTo(x(8.4), 16)
+            path.cubicTo(x(8.4), 18.4, x(8.6), 19.5, x(10.5), 19.5)
+            p.drawPath(path)
+
+    return _icon(draw)
+
+
+@themed
+def saved_search(on_shelf: bool = True) -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _SHELF_MUTED if on_shelf else _muted, 1.6)
+        p.drawEllipse(QPointF(10.5, 10.5), 5.5, 5.5)
+        p.drawLine(QPointF(14.6, 14.6), QPointF(19.5, 19.5))
+
+    return _icon(draw)
+
+
+@themed
+def cloud(on_shelf: bool = True) -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _SHELF_INK if on_shelf else _ink, 1.6)
+        path = QPainterPath(QPointF(7, 18))
+        path.cubicTo(3.5, 18, 2.8, 12.6, 6.4, 11.6)
+        path.cubicTo(6.8, 7.2, 12.6, 5.6, 15.3, 9.2)
+        path.cubicTo(19.4, 8.6, 21.6, 13.4, 19.3, 16.2)
+        path.cubicTo(18.6, 17.4, 17.8, 18, 17, 18)
+        path.closeSubpath()
+        p.drawPath(path)
+
+    return _icon(draw)
+
+
+@themed
+def study(on_strong: bool = True) -> QIcon:
+    """Speech bubble with two lines: Study and Ask AI."""
+
+    def draw(p: QPainter) -> None:
+        _stroke(p, QColor("#ffffff") if on_strong else _ink, 1.6)
+        path = QPainterPath(QPointF(5, 5))
+        path.lineTo(19, 5)
+        path.quadTo(20, 5, 20, 6)
+        path.lineTo(20, 15)
+        path.quadTo(20, 16, 19, 16)
+        path.lineTo(10, 16)
+        path.lineTo(5.5, 19.5)
+        path.lineTo(5.5, 16)
+        path.quadTo(4, 16, 4, 15)
+        path.lineTo(4, 6)
+        path.quadTo(4, 5, 5, 5)
+        p.drawPath(path)
+        p.drawLine(QPointF(8, 9.2), QPointF(16, 9.2))
+        p.drawLine(QPointF(8, 12.2), QPointF(13, 12.2))
+
+    return _icon(draw)
+
+
+@themed
+def back(on_dark: bool = True) -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _SHELF_INK if on_dark else _ink, 1.8)
+        p.drawLine(QPointF(19, 12), QPointF(5, 12))
+        p.drawPolyline(QPolygonF([QPointF(11, 6), QPointF(5, 12), QPointF(11, 18)]))
+
+    return _icon(draw)
+
+
+@themed
+def close_small(on_dark: bool = True) -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _SHELF_INK if on_dark else _ink, 2.0)
+        p.drawLine(QPointF(7, 7), QPointF(17, 17))
+        p.drawLine(QPointF(17, 7), QPointF(7, 17))
+
+    return _icon(draw)
+
+
+@themed
+def check() -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _ink, 2.0)
+        p.drawPolyline(QPolygonF([QPointF(5, 12.5), QPointF(9.5, 17), QPointF(19, 7.5)]))
+
+    return _icon(draw)
+
+
+@themed
+def note() -> QIcon:
+    def draw(p: QPainter) -> None:
+        _stroke(p, _ink, 1.5)
+        path = QPainterPath(QPointF(5, 4))
+        path.lineTo(19, 4)
+        path.lineTo(19, 16)
+        path.lineTo(15, 20)
+        path.lineTo(5, 20)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawPolyline(QPolygonF([QPointF(15, 20), QPointF(15, 16), QPointF(19, 16)]))
+        p.drawLine(QPointF(8, 9), QPointF(16, 9))
+        p.drawLine(QPointF(8, 12.5), QPointF(13, 12.5))
+
+    return _icon(draw)
+
+
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
-# Palette of the JRef logo (navy tile, teal "J", gold book).
-_TILE_TOP, _TILE_BOTTOM = QColor("#2a3b55"), QColor("#121a28")
-_J_TOP, _J_BOTTOM = QColor("#3fd3e3"), QColor("#1b9fbc")
-_BOOK, _BOOK_BAND = QColor("#e9ad43"), QColor("#9a6418")
+# Palette of the JRef logo, "ribbon J": navy tile, teal journal cover, cream pages, amber bookmark ribbon.
+_TILE_TOP, _TILE_BOTTOM = QColor("#2b3d58"), QColor("#111827")
+_COVER_TOP, _COVER_BOTTOM = QColor("#4fd8e6"), QColor("#1695b3")
+_RIBBON_TOP, _RIBBON_BOTTOM = QColor("#f4c463"), QColor("#c9862a")
+_PAGE_TOP, _PAGE_BOTTOM = QColor("#fbf5e8"), QColor("#e8dcc2")
+_PAGE_LINE, _GUTTER, _ENTRY_MARK = QColor("#c7b892"), QColor("#b9a57c"), QColor("#d9962f")
+
+
+def _vertical(top: QColor, bottom: QColor, y0: float, y1: float) -> QBrush:
+    gradient = QLinearGradient(0, y0, 0, y1)
+    gradient.setColorAt(0, top)
+    gradient.setColorAt(1, bottom)
+    return QBrush(gradient)
+
+
+def ribbon_path() -> QPainterPath:
+    """The bookmark ribbon that falls out of the gutter and curls into the J (256-unit grid)."""
+    path = QPainterPath()
+    path.moveTo(117, 96)
+    path.lineTo(141, 96)
+    path.lineTo(141, 176)
+    path.arcTo(QRectF(55, 133, 86, 86), 0, -180)  # outer bowl, (141,176) -> (55,176) through the bottom
+    path.lineTo(55, 158)
+    path.lineTo(67, 167)  # swallow-tail end of the ribbon
+    path.lineTo(79, 158)
+    path.lineTo(79, 176)
+    path.arcTo(QRectF(79, 157, 38, 38), 180, 180)  # inner bowl, (79,176) -> (117,176)
+    path.closeSubpath()
+    return path
+
+
+def _journal_paths() -> tuple[QPainterPath, QPainterPath, QPainterPath]:
+    cover = QPainterPath(QPointF(128, 74))
+    cover.cubicTo(106, 62, 70, 58, 32, 64)
+    cover.lineTo(32, 134)
+    cover.cubicTo(70, 128, 106, 132, 128, 144)
+    cover.cubicTo(150, 132, 186, 128, 224, 134)
+    cover.lineTo(224, 64)
+    cover.cubicTo(186, 58, 150, 62, 128, 74)
+    cover.closeSubpath()
+    left = QPainterPath(QPointF(128, 66))
+    left.cubicTo(108, 54, 72, 50, 40, 56)
+    left.lineTo(40, 124)
+    left.cubicTo(72, 118, 108, 122, 128, 134)
+    left.closeSubpath()
+    right = QPainterPath(QPointF(128, 66))
+    right.cubicTo(148, 54, 184, 50, 216, 56)
+    right.lineTo(216, 124)
+    right.cubicTo(184, 118, 148, 122, 128, 134)
+    right.closeSubpath()
+    return cover, left, right
+
+
+def paint_logo_mark(p: QPainter, size: int) -> None:
+    """The ribbon J and the open journal without the tile, on the 256-unit grid of the logo (the caller sets the
+    transform). ``size`` is the rendered pixel size of that grid: it decides which details are drawn."""
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(_vertical(_RIBBON_TOP, _RIBBON_BOTTOM, 80, 220))
+    p.drawPath(ribbon_path())
+    if size >= 64:
+        shine = QPainterPath(QPointF(117, 96))
+        shine.lineTo(129, 96)
+        shine.lineTo(129, 176)
+        shine.arcTo(QRectF(67, 145, 62, 62), 0, -180)
+        p.setPen(QPen(QColor(255, 255, 255, 41), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(shine)
+    cover, left, right = _journal_paths()
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(_vertical(_COVER_TOP, _COVER_BOTTOM, 50, 220))
+    p.drawPath(cover)
+    p.setBrush(_vertical(_PAGE_TOP, _PAGE_BOTTOM, 40, 200))
+    p.drawPath(left)
+    p.drawPath(right)
+    if size >= 32:
+        p.setPen(QPen(_GUTTER, 2))
+        p.drawLine(QPointF(128, 66), QPointF(128, 134))
+    if size >= 48:
+        pen = QPen(_PAGE_LINE, 4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for dy in (0, 14, 28):
+            line = QPainterPath(QPointF(54, 74 + dy))
+            line.cubicTo(76, 70 + dy, 98, 72 + dy, 114, 78 + dy)
+            p.drawPath(line)
+            line = QPainterPath(QPointF(156, 78 + dy))
+            line.cubicTo(170, 72 + dy, 188, 70 + dy, 202, 74 + dy)
+            p.drawPath(line)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_ENTRY_MARK)
+        for dy in (0, 14, 28):
+            p.drawRoundedRect(QRectF(142, 73 + dy, 7, 7), 1.2, 1.2)
+    p.restore()
+
+
+def paint_tile(p: QPainter, rect: QRectF, radius: float, *, border: bool = True) -> None:
+    """The navy tile of the logo (vertical gradient, thin light edge)."""
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(_vertical(_TILE_TOP, _TILE_BOTTOM, rect.top(), rect.bottom()))
+    p.drawRoundedRect(rect, radius, radius)
+    if border:
+        width = max(1.0, rect.width() / 120)
+        p.setPen(QPen(QColor(255, 255, 255, 31), width))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        inner = rect.adjusted(width / 2, width / 2, -width / 2, -width / 2)
+        p.drawRoundedRect(inner, radius - width / 2, radius - width / 2)
+    p.restore()
 
 
 def paint_app_icon(p: QPainter, size: int) -> None:
-    """The simplified JRef mark -- a teal "J" holding a gold book on a navy tile -- drawn as vectors
-    on a 32-unit grid so it stays crisp from 16 px (title bar, taskbar) to 256 px (Explorer). Small sizes
-    drop the hairline details (tile border, book bands) and thicken the J."""
+    """The JRef logo -- an open journal whose amber bookmark ribbon curls into the J -- drawn as vectors on a
+    256-unit grid (the master artwork is ``packaging/branding/jref_logo_ribbon.svg``). It stays legible from
+    16 px (title bar, taskbar) to 1024 px; below 48 px the text lines on the pages are left out."""
     p.save()
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.scale(size / 32.0, size / 32.0)
-    tile = QRectF(1, 1, 30, 30)
-    gradient = QLinearGradient(0, 1, 0, 31)
-    gradient.setColorAt(0, _TILE_TOP)
-    gradient.setColorAt(1, _TILE_BOTTOM)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(gradient))
-    p.drawRoundedRect(tile, 7, 7)
-    if size >= 32:
-        hair = 32 / size
-        p.setPen(QPen(QColor(255, 255, 255, 34), hair))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(tile.adjusted(hair / 2, hair / 2, -hair / 2, -hair / 2), 6.6, 6.6)
-    # the book, leaning against the stem of the J
-    p.save()
-    p.translate(18.6, 20.4)
-    p.rotate(-14)
-    p.translate(-18.6, -20.4)
-    book = QRectF(13.0, 10.6, 5.0, 9.8)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(_BOOK)
-    p.drawRoundedRect(book, 0.8, 0.8)
-    if size >= 24:
-        p.setBrush(_BOOK_BAND)
-        p.drawRect(QRectF(book.left(), book.top() + 1.5, book.width(), 0.7))
-        p.drawRect(QRectF(book.left(), book.bottom() - 2.2, book.width(), 0.7))
-    p.restore()
-    # the J: top bar, stem, hook
-    j = QPainterPath()
-    j.moveTo(13.0, 8.2)
-    j.lineTo(25.0, 8.2)
-    j.moveTo(21.2, 8.2)
-    j.lineTo(21.2, 18.6)
-    j.arcTo(QRectF(10.0, 13.0, 11.2, 11.2), 0, -180)
-    j.lineTo(10.0, 17.0)
-    j_gradient = QLinearGradient(0, 6, 0, 26)
-    j_gradient.setColorAt(0, _J_TOP)
-    j_gradient.setColorAt(1, _J_BOTTOM)
-    pen = QPen(QBrush(j_gradient), 4.0 if size >= 24 else 4.4)
-    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPath(j)
+    p.scale(size / 256.0, size / 256.0)
+    paint_tile(p, QRectF(8, 8, 240, 240), 56, border=size >= 32)
+    paint_logo_mark(p, size)
     p.restore()
 
 
@@ -645,7 +878,7 @@ def app_icon_image(size: int) -> QImage:
 
 @cache
 def app_icon() -> QIcon:
-    """Application icon (window, taskbar, .ico): the simplified mark at every standard size."""
+    """Application icon (window, taskbar, .ico): the logo at every standard size."""
     icon = QIcon()
     for size in APP_ICON_SIZES:
         icon.addPixmap(QPixmap.fromImage(app_icon_image(size)))
@@ -653,10 +886,10 @@ def app_icon() -> QIcon:
 
 
 def brand_pixmap(size: int, *, with_name: bool = True) -> QPixmap:
-    """Full logo artwork for dialogs (About, Welcome): the tile with the name, or the emblem alone."""
+    """Logo artwork for dialogs (About, Welcome): the tile with the name, or the emblem alone."""
     source = QPixmap(str(ASSETS_DIR / ("jref_tile.png" if with_name else "jref_glyph.png")))
     ratio = QGuiApplication.primaryScreen().devicePixelRatio() if QGuiApplication.primaryScreen() else 1.0
-    if source.isNull():  # pragma: no cover - broken installation: fall back to the simplified mark
+    if source.isNull():  # pragma: no cover - broken installation: fall back to the vector logo
         source = QPixmap.fromImage(app_icon_image(round(size * ratio)))
     pix = source.scaled(
         round(size * ratio),

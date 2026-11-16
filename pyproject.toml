@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jref"
-version = "0.7.0"
+version = "0.8.0"
 description = "JRef - Journal Reference Manager: local, file-first academic reference manager for LaTeX workflows."
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -52,7 +52,7 @@ bibmanager = "bibmanager.gui.app:main"  # pre-0.5 name
 include = ["bibmanager*"]
 
 [tool.setuptools.package-data]
-"bibmanager.gui" = ["assets/*.png"]
+"bibmanager.gui" = ["assets/*.png", "fonts/*.ttf", "fonts/*.txt"]
 "bibmanager.mobile" = ["*.kv", "assets/*.png"]
 
 [tool.pytest.ini_options]

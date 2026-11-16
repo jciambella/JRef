@@ -1,8 +1,9 @@
-"""Left pane: navigation (special views + logical project folders, with counts) and the facet filter list."""
+"""The shelf: JRef's left column on navy -- Inbox, Library, the projects (each with the state of its .bib file),
+the saved searches, and the synchronisation status of a shared library."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -11,10 +12,9 @@ from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QRect,
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QFrame,
-    QListWidget,
-    QListWidgetItem,
+    QHBoxLayout,
+    QLabel,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -23,60 +23,38 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.models import Collection, Paper
+from .. import APP_NAME, APP_SUBTITLE
+from ..core.models import Collection
 from . import icons, theme
-from .paper_model import FACET_KINDS, PAPER_MIME, facet_values
+from .paper_model import PAPER_MIME
 
 KIND_ROLE = Qt.ItemDataRole.UserRole + 10
 COLLECTION_ROLE = Qt.ItemDataRole.UserRole + 11
 COUNT_ROLE = Qt.ItemDataRole.UserRole + 12
+STATUS_ROLE = Qt.ItemDataRole.UserRole + 13  # (text, state) under a project: state "ok" | "pending" | "none"
+QUERY_ROLE = Qt.ItemDataRole.UserRole + 14
 
 
 class NodeKind(StrEnum):
-    ALL = "all"
-    RECENT_ADDED = "recent_added"
-    RECENT_READ = "recent_read"
-    FAVORITES = "favorites"
-    REVIEW = "review"
-    MINE = "mine"
-    UNSORTED = "unsorted"
-    FOLDER = "folder"
+    INBOX = "inbox"  # imported references not verified yet (needs_review)
+    ALL = "all"  # the library
+    FOLDER = "folder"  # a project: a logical collection with its own .bib file
+    SAVED = "saved"  # a saved search (COLLECTION_ROLE holds its position in the list)
     CREATE = "create"
     HEADER = "header"
 
 
-SPECIAL_NODES: tuple[tuple[NodeKind, str], ...] = (
-    (NodeKind.ALL, "All documents"),
-    (NodeKind.RECENT_ADDED, "Recently added"),
-    (NodeKind.RECENT_READ, "Recently read"),
-    (NodeKind.FAVORITES, "Favorites"),
-    (NodeKind.REVIEW, "Needs review"),
-    (NodeKind.MINE, "My publications"),
-    (NodeKind.UNSORTED, "Unsorted"),
-)
+SPECIAL_NODES: tuple[tuple[NodeKind, str], ...] = ((NodeKind.INBOX, "Inbox"), (NodeKind.ALL, "Library"))
 NODE_TITLES = dict(SPECIAL_NODES)
 
-# Where things may be dropped: documents onto folders / Favorites / My Publications,
-# PDF files anywhere except the "Create Folder..." entry and the read-history view.
-_PAPER_TARGETS = {NodeKind.FOLDER, NodeKind.FAVORITES, NodeKind.MINE}
-_FILE_TARGETS = set(NodeKind) - {NodeKind.CREATE, NodeKind.RECENT_READ, NodeKind.HEADER}
-_COUNTED = {NodeKind.ALL, NodeKind.FAVORITES, NodeKind.REVIEW, NodeKind.MINE, NodeKind.UNSORTED, NodeKind.FOLDER}
+# Where things may be dropped: references onto projects; PDF files onto the library, the inbox and projects.
+_PAPER_TARGETS = {NodeKind.FOLDER}
+_FILE_TARGETS = {NodeKind.ALL, NodeKind.INBOX, NodeKind.FOLDER}
+_COUNTED = {NodeKind.INBOX, NodeKind.ALL, NodeKind.FOLDER}
 
 Node = tuple[NodeKind, int | None]
 DropHandler = Callable[[QMimeData, NodeKind, int | None], bool]
-
-
-def _special_icon(kind: NodeKind) -> QIcon:
-    factories: dict[NodeKind, Callable[[], QIcon]] = {
-        NodeKind.ALL: icons.all_documents,
-        NodeKind.RECENT_ADDED: icons.recently_added,
-        NodeKind.RECENT_READ: icons.recently_read,
-        NodeKind.FAVORITES: icons.favorites,
-        NodeKind.REVIEW: icons.needs_review,
-        NodeKind.MINE: icons.person,
-        NodeKind.UNSORTED: icons.unsorted,
-    }
-    return factories[kind]()
+SavedSearch = tuple[str, str, str]  # name, query, sort
 
 
 def _local_pdf_paths(mime: QMimeData) -> list[Path]:
@@ -122,21 +100,33 @@ class CollectionModel(QStandardItemModel):
 
 
 def count_key(kind: NodeKind | str, collection_id: int | None = None) -> str:
-    return f"folder:{collection_id}" if kind == NodeKind.FOLDER else str(kind)
+    if kind == NodeKind.FOLDER:
+        return f"folder:{collection_id}"
+    if kind == NodeKind.INBOX:
+        return "review"
+    return str(kind)
 
 
-class NavDelegate(QStyledItemDelegate):
-    """Fluent navigation item: rounded hover/selection, accent pill, icon, label and count."""
+class ShelfDelegate(QStyledItemDelegate):
+    """Shelf item on navy: rounded hover/selection, icon, label (two lines for a project: name and .bib state),
+    count on the right (an amber pill for the inbox)."""
 
-    ROW = 32
+    ROW = 36
+    PROJECT = 46
     HEADER = 34
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex) -> QSize:
-        height = self.HEADER if index.data(KIND_ROLE) == NodeKind.HEADER else self.ROW
+        kind = index.data(KIND_ROLE)
+        if kind == NodeKind.HEADER:
+            height = self.HEADER
+        elif kind == NodeKind.FOLDER and index.data(STATUS_ROLE):
+            height = self.PROJECT
+        else:
+            height = self.ROW
         return QSize(super().sizeHint(option, index).width(), height)
 
     def updateEditorGeometry(self, editor: QWidget, option: QStyleOptionViewItem, index: Any) -> None:
-        editor.setGeometry(option.rect.adjusted(32, 3, -6, -3))
+        editor.setGeometry(option.rect.adjusted(34, 4, -8, -(option.rect.height() - 30)))
 
     def paint(
         self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
@@ -150,53 +140,92 @@ class NavDelegate(QStyledItemDelegate):
         if kind == NodeKind.HEADER:
             font = QFont(option.font)
             font.setWeight(QFont.Weight.DemiBold)
-            font.setPointSizeF(font.pointSizeF() * 0.92)
+            font.setPointSizeF(font.pointSizeF() * 0.78)
+            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
             painter.setFont(font)
-            painter.setPen(theme.qcolor(t.text_secondary))
+            painter.setPen(theme.qcolor(t.shelf_header))
             painter.drawText(
-                rect.adjusted(10, 10, -8, 0), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text
+                rect.adjusted(12, 12, -8, 0),
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                text.upper(),
             )
             painter.restore()
             return
-        bg = rect.adjusted(2, 2, -4, -2)
+        bg = rect.adjusted(4, 2, -6, -2)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         if selected or hovered:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(theme.qcolor(t.selected if selected else t.hover))
-            painter.drawRoundedRect(bg, 5, 5)
-        if selected:
-            painter.setBrush(theme.qcolor(t.accent))
-            painter.drawRoundedRect(QRectF(bg.left(), bg.center().y() - 8, 3, 16), 1.5, 1.5)
+            painter.setBrush(theme.qcolor(t.shelf_selected if selected else t.shelf_hover))
+            painter.drawRoundedRect(bg, 8, 8)
+        status = index.data(STATUS_ROLE)
+        two_lines = kind == NodeKind.FOLDER and bool(status)
         icon = index.data(Qt.ItemDataRole.DecorationRole)
+        icon_top = int(bg.top()) + 8 if two_lines else int(bg.center().y()) - 9
         if isinstance(icon, QIcon) and not icon.isNull():
-            icon.paint(painter, QRect(int(bg.left()) + 10, int(bg.center().y()) - 8, 16, 16))
-        text_rect = bg.adjusted(34, 0, -8, 0)
+            icon.paint(painter, QRect(int(bg.left()) + 9, icon_top, 18, 18))
+        text_rect = bg.adjusted(36, 0, -10, 0)
         count = index.data(COUNT_ROLE)
         if count:
-            label = str(count)
+            label = f"{count:,}"
             metrics = QFontMetrics(option.font)
-            width = metrics.horizontalAdvance(label) + (12 if kind == NodeKind.REVIEW else 0)
-            badge = QRectF(text_rect.right() - width, bg.center().y() - 9, width, 18)
-            if kind == NodeKind.REVIEW:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(theme.qcolor(t.warning_bg))
-                painter.drawRoundedRect(badge, 9, 9)
-                painter.setPen(theme.qcolor(t.warning))
-            else:
-                painter.setPen(theme.qcolor(t.text_tertiary))
+            pill = kind == NodeKind.INBOX
+            width = metrics.horizontalAdvance(label) + (16 if pill else 0)
+            badge = QRectF(text_rect.right() - width, (bg.top() + 6) if two_lines else bg.center().y() - 9, width, 18)
             painter.setFont(option.font)
+            if pill:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(theme.qcolor(t.accent))
+                painter.drawRoundedRect(badge, 9, 9)
+                bold = QFont(option.font)
+                bold.setWeight(QFont.Weight.DemiBold)
+                bold.setPointSizeF(option.font.pointSizeF() * 0.9)
+                painter.setFont(bold)
+                painter.setPen(theme.qcolor(t.accent_text))
+            else:
+                painter.setPen(theme.qcolor(t.shelf_muted))
             painter.drawText(badge, int(Qt.AlignmentFlag.AlignCenter), label)
             text_rect.setRight(badge.left() - 6)
-        painter.setFont(option.font)
-        painter.setPen(theme.qcolor(t.text_secondary if kind == NodeKind.CREATE else t.text))
-        elided = QFontMetrics(option.font).elidedText(text, Qt.TextElideMode.ElideRight, int(text_rect.width()))
-        painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided)
+        name_font = QFont(option.font)
+        if two_lines:
+            name_font.setWeight(QFont.Weight.Medium)
+        painter.setFont(name_font)
+        color = t.shelf_muted if kind == NodeKind.CREATE else t.shelf_text
+        painter.setPen(theme.qcolor(color))
+        metrics = QFontMetrics(name_font)
+        if two_lines:
+            line1 = QRectF(text_rect.left(), bg.top() + 5, text_rect.width(), metrics.lineSpacing())
+            painter.drawText(line1, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                             metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(text_rect.width())))  # fmt: skip
+            status_text, state = status
+            small = QFont(option.font)
+            small.setPointSizeF(option.font.pointSizeF() * 0.84)
+            small_metrics = QFontMetrics(small)
+            dot_y = line1.bottom() + 2 + small_metrics.lineSpacing() / 2
+            dot = {"ok": t.ok_dot, "pending": t.accent}.get(state, t.shelf_muted)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(theme.qcolor(dot))
+            painter.drawEllipse(QRectF(text_rect.left(), dot_y - 3, 6, 6))
+            painter.setFont(small)
+            painter.setPen(theme.qcolor(t.shelf_muted))
+            line2 = QRectF(
+                text_rect.left() + 11, line1.bottom() + 2, text_rect.width() - 11, small_metrics.lineSpacing()
+            )
+            painter.drawText(line2, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                             small_metrics.elidedText(status_text, Qt.TextElideMode.ElideRight,
+                                                      int(line2.width())))  # fmt: skip
+        else:
+            painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                             metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(text_rect.width())))  # fmt: skip
         painter.restore()
 
 
+# Kept for code written against 0.7.
+NavDelegate = ShelfDelegate
+
+
 class CollectionTree(QTreeView):
-    nodeSelected = Signal(str, object)  # kind, collection id | None
+    nodeSelected = Signal(str, object)  # kind, collection id | saved-search position | None
     folderRenamed = Signal(int, str)
     createFolderRequested = Signal()
 
@@ -206,8 +235,8 @@ class CollectionTree(QTreeView):
         self.source = CollectionModel(self)
         self.setModel(self.source)
         self.setHeaderHidden(True)
-        self.setItemDelegate(NavDelegate(self))
-        self.setIndentation(12)
+        self.setItemDelegate(ShelfDelegate(self))
+        self.setIndentation(14)
         self.setMouseTracking(True)
         self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -223,33 +252,55 @@ class CollectionTree(QTreeView):
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
         self.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._building = False
+        self._saved: list[SavedSearch] = []
         self.selectionModel().currentChanged.connect(self._on_current_changed)
         self.source.itemChanged.connect(self._on_item_changed)
         self.clicked.connect(self._on_clicked)
 
     # ------------------------------------------------------------------ building
-    def rebuild(self, collections: Iterable[Collection], select: Node | None = None) -> None:
+    def rebuild(
+        self,
+        collections: Iterable[Collection],
+        select: Node | None = None,
+        *,
+        statuses: Mapping[int, tuple[str, str]] | None = None,
+        saved: Sequence[SavedSearch] = (),
+    ) -> None:
         current = select or self.current_node()
         expanded = self._expanded_ids()
+        statuses = statuses or {}
+        self._saved = list(saved)
         self._building = True
         try:
             self.source.clear()
             root = self.source.invisibleRootItem()
-            root.appendRow(self._header("Library"))
-            for kind, title in SPECIAL_NODES:
-                root.appendRow(self._item(title, kind, None, _special_icon(kind)))
-            root.appendRow(self._header("Folders"))
+            root.appendRow(self._item("Inbox", NodeKind.INBOX, None, icons.inbox()))
+            root.appendRow(self._item("Library", NodeKind.ALL, None, icons.library()))
+            root.appendRow(self._header("Projects"))
             items: dict[int, QStandardItem] = {}
             pending = sorted(collections, key=lambda c: c.name.casefold())
             for collection in pending:
-                item = self._item(collection.name, NodeKind.FOLDER, collection.id, icons.folder(), editable=True)
-                item.setToolTip(f"{collection.name}\n.bib: {collection.slug}.bib")
+                item = self._item(collection.name, NodeKind.FOLDER, collection.id, icons.project(), editable=True)
+                status = statuses.get(collection.id)
+                if status:
+                    item.setData(status, STATUS_ROLE)
+                item.setToolTip(f"{collection.name}\nbibtex/{collection.slug}.bib"
+                                + (f"\nalso written to {collection.bib_export_path}" if collection.bib_export_path
+                                   else ""))  # fmt: skip
                 items[collection.id] = item
             for collection in pending:
                 parent = items.get(collection.parent_id) if collection.parent_id else None
                 (parent or root).appendRow(items[collection.id])
-            root.appendRow(self._item("New folder", NodeKind.CREATE, None, icons.add_small()))
+            root.appendRow(self._item("New project", NodeKind.CREATE, None, icons.add_small()))
+            if self._saved:
+                root.appendRow(self._header("Saved searches"))
+                for position, (name, query, _sort) in enumerate(self._saved):
+                    item = self._item(name, NodeKind.SAVED, position, icons.saved_search())
+                    item.setData(query, QUERY_ROLE)
+                    item.setToolTip(query or "(every reference)")
+                    root.appendRow(item)
             for cid in expanded:
                 if cid in items:
                     self.setExpanded(items[cid].index(), True)
@@ -280,8 +331,13 @@ class CollectionTree(QTreeView):
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         return item
 
+    def saved_search(self, position: int | None) -> SavedSearch | None:
+        if position is None or not 0 <= position < len(self._saved):
+            return None
+        return self._saved[position]
+
     def update_counts(self, counts: dict[str, int]) -> None:
-        """Show document counts next to the views and folders (no rebuild, no signals)."""
+        """Show reference counts next to Inbox, Library and the projects (no rebuild, no signals)."""
 
         def walk(item: QStandardItem) -> None:
             for row in range(item.rowCount()):
@@ -291,6 +347,24 @@ class CollectionTree(QTreeView):
                     value = counts.get(count_key(kind, child.data(COLLECTION_ROLE)), 0)
                     if child.data(COUNT_ROLE) != value:
                         child.setData(value, COUNT_ROLE)
+                walk(child)
+
+        self._building = True
+        try:
+            walk(self.source.invisibleRootItem())
+        finally:
+            self._building = False
+
+    def update_statuses(self, statuses: Mapping[int, tuple[str, str]]) -> None:
+        """Refresh the .bib state under each project (no rebuild, no signals)."""
+
+        def walk(item: QStandardItem) -> None:
+            for row in range(item.rowCount()):
+                child = item.child(row)
+                if child.data(KIND_ROLE) == NodeKind.FOLDER:
+                    status = statuses.get(child.data(COLLECTION_ROLE))
+                    if status and child.data(STATUS_ROLE) != status:
+                        child.setData(status, STATUS_ROLE)
                 walk(child)
 
         self._building = True
@@ -318,7 +392,7 @@ class CollectionTree(QTreeView):
             for row in range(item.rowCount()):
                 child = item.child(row)
                 if child.data(KIND_ROLE) == str(kind) and (
-                    kind != NodeKind.FOLDER or child.data(COLLECTION_ROLE) == collection_id
+                    kind not in (NodeKind.FOLDER, NodeKind.SAVED) or child.data(COLLECTION_ROLE) == collection_id
                 ):
                     return child.index()
                 found = walk(child)
@@ -329,7 +403,11 @@ class CollectionTree(QTreeView):
         return walk(self.source.invisibleRootItem()) or QModelIndex()
 
     def select_node(self, kind: NodeKind | str, collection_id: int | None = None) -> bool:
-        index = self.find_index(NodeKind(kind), collection_id)
+        try:
+            kind = NodeKind(kind)
+        except ValueError:  # a view of an earlier release (e.g. "favorites"): show the library
+            kind, collection_id = NodeKind.ALL, None
+        index = self.find_index(kind, collection_id)
         if not index.isValid():
             index = self.find_index(NodeKind.ALL)
         parent = index.parent()
@@ -368,74 +446,65 @@ class CollectionTree(QTreeView):
         self.folderRenamed.emit(int(item.data(COLLECTION_ROLE)), item.text())
 
 
-class FilterPane(QWidget):
-    """ "Filter by Authors / Author Keywords / My Tags / Publications" list under the tree."""
-
-    facetChanged = Signal(object, object)  # kind, value | None
-    LABELS = {
-        "authors": "Filter by Authors",
-        "keywords": "Filter by Author Keywords",
-        "tags": "Filter by My Tags",
-        "publications": "Filter by Publications",
-    }
+class Shelf(QFrame):
+    """The left column: brand, navigation tree and the synchronisation card."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("facetPane")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.combo = QComboBox(self)
-        self.combo.setObjectName("facetCombo")
-        for kind in FACET_KINDS:
-            self.combo.addItem(self.LABELS[kind], kind)
-        self.list = QListWidget(self)
-        self.list.setObjectName("facetList")
-        self.list.setUniformItemSizes(True)
+        self.setObjectName("shelf")
+        self.setMinimumWidth(220)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self.combo)
-        layout.addWidget(self.list)
-        self._papers: list[Paper] = []
-        self._populating = False
-        self.combo.currentIndexChanged.connect(self._on_kind_changed)
-        self.list.currentItemChanged.connect(self._on_item_changed)
+        layout.setContentsMargins(10, 16, 10, 12)
+        layout.setSpacing(12)
+        brand = QHBoxLayout()
+        brand.setContentsMargins(8, 0, 0, 0)
+        brand.setSpacing(10)
+        self.logo = QLabel()
+        brand.addWidget(self.logo)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        name = QLabel(APP_NAME)
+        name.setObjectName("brandName")
+        subtitle = QLabel(APP_SUBTITLE)
+        subtitle.setObjectName("brandSubtitle")
+        names.addWidget(name)
+        names.addWidget(subtitle)
+        brand.addLayout(names)
+        brand.addStretch(1)
+        layout.addLayout(brand)
+        self.tree = CollectionTree()
+        layout.addWidget(self.tree, 1)
+        self.card = QFrame()
+        self.card.setObjectName("shelfCard")
+        card = QVBoxLayout(self.card)
+        card.setContentsMargins(12, 10, 12, 10)
+        card.setSpacing(3)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self.cloud = QLabel()
+        top.addWidget(self.cloud)
+        self.device_label = QLabel()
+        self.device_label.setObjectName("deviceSync")
+        self.device_label.setWordWrap(True)
+        top.addWidget(self.device_label, 1)
+        card.addLayout(top)
+        self.folder_label = QLabel()
+        self.folder_label.setWordWrap(True)
+        card.addWidget(self.folder_label)
+        layout.addWidget(self.card)
+        self.refresh()
 
-    @property
-    def kind(self) -> str:
-        return str(self.combo.currentData())
+    def refresh(self) -> None:
+        self.logo.setPixmap(icons.app_icon().pixmap(30, 30))
+        self.cloud.setPixmap(icons.cloud().pixmap(16, 16))
 
-    def selected_value(self) -> str | None:
-        item = self.list.currentItem()
-        return None if item is None or item.data(Qt.ItemDataRole.UserRole) is None else item.text()
+    def set_library(self, root: Path, *, shared: bool, status: str) -> None:
+        self.device_label.setText(status if shared else "Not shared with other devices")
+        self.cloud.setVisible(shared)
+        self.folder_label.setText(f"Library folder: {_short_path(root)}")
+        self.folder_label.setToolTip(str(root))
 
-    def set_papers(self, papers: Iterable[Paper]) -> None:
-        self._papers = list(papers)
-        self._populate(keep=self.selected_value())
 
-    def _populate(self, keep: str | None = None) -> None:
-        values = sorted({v for p in self._papers for v in facet_values(p, self.kind) if v}, key=str.casefold)
-        self._populating = True
-        try:
-            self.list.clear()
-            all_item = QListWidgetItem("All")
-            self.list.addItem(all_item)
-            selected = all_item
-            for value in values:
-                item = QListWidgetItem(value)
-                item.setData(Qt.ItemDataRole.UserRole, value)
-                self.list.addItem(item)
-                if value == keep:
-                    selected = item
-            self.list.setCurrentItem(selected)
-        finally:
-            self._populating = False
-        if keep is not None and selected is all_item:
-            self.facetChanged.emit(self.kind, None)  # previous value vanished from this view
-
-    def _on_kind_changed(self, _index: int) -> None:
-        self._populate()
-        self.facetChanged.emit(self.kind, None)
-
-    def _on_item_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
-        if not self._populating:
-            self.facetChanged.emit(self.kind, self.selected_value())
+def _short_path(path: Path, parts: int = 2) -> str:
+    tail = Path(path).parts[-parts:]
+    return " › ".join(tail) if tail else str(path)
