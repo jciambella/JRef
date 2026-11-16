@@ -370,7 +370,9 @@ class Library:
                 absolute = os.path.abspath(recorded)
                 if os.path.normcase(absolute).startswith(root + os.sep):
                     relative = Path(absolute[len(root) + 1 :]).as_posix()
-                    self.db.conn.execute("UPDATE attachments SET relative_path = ? WHERE id = ?", (relative, attachment_id))
+                    self.db.conn.execute(
+                        "UPDATE attachments SET relative_path = ? WHERE id = ?", (relative, attachment_id)
+                    )
 
     def linked_path_value(self, path: Path) -> str:
         """How a linked file is recorded: POSIX path relative to the library root when inside it (portable
@@ -535,6 +537,12 @@ class Library:
         meta = replace(candidate.metadata, doi=clean_doi(candidate.metadata.doi))
         if meta.doi:
             existing = self.db.get_paper_by_doi(meta.doi)
+            if existing is not None and not existing.has_pdf:
+                # An entry without PDF (e.g. from a .bib import) gets this file: the PDF it was waiting for.
+                attachment = AttachmentCandidate(candidate.source_path, candidate.sha256, candidate.full_text)
+                paper = self.attach_pdf(existing.id, attachment, mode=mode)
+                messages = [*candidate.log, f"Attached to the existing entry {paper.citation_key} (same DOI)"]
+                return self._link_existing(paper, collection_id, IngestStatus.IMPORTED, messages)
             if existing is not None:
                 return self._link_existing(existing, collection_id, IngestStatus.DUPLICATE_DOI, candidate.log)
 
@@ -1114,7 +1122,9 @@ class Library:
         """Files whose text makes up the paper's full-text entry: the main PDF and the supplementary PDFs."""
         paper = self.get_paper(paper_id)
         paths = [p] if (p := self.pdf_path(paper)) is not None and p.is_file() else []
-        paths += [path for a in self.db.attachments_of(paper_id) if a.is_pdf and (path := self.attachment_path(a)).is_file()]
+        paths += [
+            path for a in self.db.attachments_of(paper_id) if a.is_pdf and (path := self.attachment_path(a)).is_file()
+        ]
         return paths
 
     @staticmethod

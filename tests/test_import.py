@@ -547,6 +547,27 @@ def test_attach_pdf_to_a_reference_without_one(library: Library, tmp_path: Path,
     assert linked.pdf_linked and linked.citation_key == "Other2020"
 
 
+def test_import_with_the_doi_of_an_entry_without_pdf_attaches_to_it(
+    library: Library, make_pdf: Callable[..., Path]
+) -> None:
+    from dataclasses import replace
+
+    from bibmanager.core import ReferenceCandidate
+
+    ref = ReferenceCandidate("Rubin2015", replace(meta("Rubin", year=2015, title="Cosserat rods"), doi="10.1/abc"))
+    paper = library.commit_reference(ref).paper
+    pdf = make_pdf("download.pdf", lines=["cosserat rods"])
+    result = library.commit_import(
+        library.prepare_import(pdf, metadata=replace(meta("Rubin", year=2015), doi="10.1/ABC")), mode="move"
+    )
+    assert result.status is IngestStatus.IMPORTED and result.paper.id == paper.id
+    assert result.paper.pdf_managed and result.paper.relative_pdf_path == "pdfs/2015/Rubin2015.pdf"
+    assert not pdf.exists() and len(library.papers()) == 1
+    again = make_pdf("again.pdf", lines=["another copy"])  # the entry has a PDF now: a duplicate, as before
+    dup = library.commit_import(library.prepare_import(again, metadata=replace(meta("Rubin", year=2015), doi="10.1/abc")))
+    assert dup.status is IngestStatus.DUPLICATE_DOI and again.exists()
+
+
 def test_find_missing_pdfs_rules_and_ties(tmp_path: Path) -> None:
     from bibmanager.core.models import Paper
     from bibmanager.core.relink import find_missing_pdfs
