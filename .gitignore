@@ -11,3 +11,14 @@ dist/
 bin/
 .venv-android/
 *.apk
+
+# Not part of the source tree
+*.bundle
+*.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,9 @@
+# Source files are stored with LF line endings and checked out with LF on every platform.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.exe binary
