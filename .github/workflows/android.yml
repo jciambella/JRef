@@ -48,8 +48,9 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
+          # Only an identical buildozer.spec reuses a cache: builds left by another python-for-android version
+          # would be mixed into the new one.
           key: buildozer-${{ runner.os }}-24.04-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-${{ runner.os }}-24.04-
 
       - name: Build the APK
         # Licences are accepted by buildozer.spec (android.accept_sdk_license); stdin is closed so nothing can wait
