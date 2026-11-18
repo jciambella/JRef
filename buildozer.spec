@@ -43,6 +43,14 @@ android.accept_sdk_license = True
 android.allow_backup = False
 android.logcat_filters = *:S python:D
 
+# python-for-android: buildozer's default (branch master = release v2026.05.09) cannot build this app. Its pip
+# stage resolves charset-normalizer (pulled in by requests, a dependency of the kivy recipe) to the Android wheel
+# now on PyPI, then installs it with the build machine's pip, which rejects it ("... android_24_arm64_v8a.whl is
+# not a supported wheel on this platform"; p4a issues #3364 and #3411). Fixed on develop by p4a PR #3366, not
+# released yet. Pinned to a develop commit for reproducible builds; return to a release tag once one has the fix.
+p4a.branch = develop
+p4a.commit = 9562d1b4f306d0af1e76991c711114010dea4152
+
 [buildozer]
 log_level = 2
 warn_on_root = 0
