@@ -1110,3 +1110,88 @@ def test_ask_ai_panel_streams_an_answer_and_saves_it_to_the_notes(
     panel.ask_in_browser("Claude", "https://claude.ai/new")
     assert launched == ["https://claude.ai/new"] and revealed and revealed[0].suffix == ".pdf"
     assert "Question: What is J?" in QGuiApplication.clipboard().text()
+
+
+# =========================================================================== ZIP export of a project
+def test_export_project_pdfs_as_zip_from_the_project_menu(
+    window: MainWindow, library: Library, make_pdf: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zipfile
+    from functools import partial
+
+    from PySide6.QtWidgets import QFileDialog
+
+    from bibmanager.core.export import ZipOptions
+    from bibmanager.gui.dialogs import ZipExportDialog
+
+    project = library.create_collection("Soft robotics")
+    chapter = library.create_collection("Chapter 2", parent_id=project.id)
+    _ingest(library, make_pdf, "Anand", year=2023, collection_id=project.id)
+    _ingest(library, make_pdf, "Ogden", year=1972, collection_id=chapter.id)
+    window.reload_tree(select=(NodeKind.FOLDER, project.id))
+    QApplication.processEvents()
+
+    def accept(dialog: ZipExportDialog) -> Any:
+        assert dialog.windowTitle() == "Export PDFs — Soft robotics" and dialog.bib.isChecked()
+        assert not dialog.subprojects.isHidden() and not dialog.subprojects.isChecked()
+        assert "<b>1 PDF</b> from 1 reference" in dialog.summary.text()
+        dialog.subprojects.setChecked(True)  # the plan is recomputed with the sub-project
+        assert "<b>2 PDFs</b> from 2 references" in dialog.summary.text()
+        return ZipExportDialog.DialogCode.Accepted
+
+    share = tmp_path / "share"
+    share.mkdir()
+    monkeypatch.setattr(ZipExportDialog, "exec", accept)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(share / "for_colleagues"), ""))
+    reports: list[Any] = []
+    monkeypatch.setattr("bibmanager.gui.main_window.show_zip_report", lambda _p, plan, rep: reports.append(rep) or True)
+    revealed: list[Path] = []
+    monkeypatch.setattr(window, "_reveal", revealed.append)
+    menu = window.tree_menu_for(window.tree.node_at(
+        window.tree.visualRect(window.tree.find_index(NodeKind.FOLDER, project.id)).center()
+    ))  # fmt: skip
+    labels = [action.text() for action in menu.actions()]
+    menu.actions()[labels.index("Export PDFs as ZIP...")].trigger()  # right-click on the project
+    window.runner.wait_idle()
+    QApplication.processEvents()
+
+    assert "Export PDFs as ZIP..." in labels and window._zip_job is None and not window.zip_exporter.running
+    (report,) = reports
+    target = share / "for_colleagues.zip"
+    assert report.target == target and report.pdfs == 2 and report.bib and revealed == [target]
+    with zipfile.ZipFile(target) as archive:
+        assert sorted(archive.namelist()) == [
+            "soft_robotics/Anand_2023.pdf", "soft_robotics/Ogden_1972.pdf", "soft_robotics/soft_robotics.bib"
+        ]  # fmt: skip
+    assert window._zip_options() == ZipOptions(include_bib=True, include_supplements=False, include_subprojects=True)
+    assert window.settings.value("zipExport/lastDir") == str(share)
+    assert window.act_export_zip in window.palette_actions()
+
+    # Cancel from the progress dialog: the worker stops at the next chunk and leaves no partial archive behind.
+    import threading
+
+    from bibmanager.gui.workers import ZipExportController
+
+    gate = threading.Event()
+    report_progress = ZipExportController._report_progress
+
+    def held(self: ZipExportController, done: int, total: int) -> None:  # worker thread waits for the click
+        gate.wait(10)
+        report_progress(self, done, total)
+
+    monkeypatch.setattr(ZipExportController, "_report_progress", held)
+    monkeypatch.setattr(ZipExportDialog, "exec", lambda dialog: dialog.subprojects.isChecked())  # remembered: on
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(share / "cancelled.zip"), ""))
+    window.export_project_zip()  # File menu / command palette: the selected project
+    assert window.zip_exporter.running and window._zip_job is not None
+    window._zip_job[1].canceled.emit()  # the user clicks Cancel (the button emits canceled)
+    gate.set()
+    window.runner.wait_idle()
+    assert not window.zip_exporter.running and window._zip_job is None
+    assert window.status_label.text() == "ZIP export cancelled" and len(reports) == 1
+    assert sorted(p.name for p in share.iterdir()) == ["for_colleagues.zip"]
+
+    empty = library.create_collection("Empty")  # nothing to export: the button is disabled
+    dialog = ZipExportDialog(window, planner=partial(library.plan_project_zip, empty.id), options=ZipOptions())
+    assert not dialog.export_button.isEnabled() and "nothing to export" in dialog.summary.text()
+    dialog.deleteLater()

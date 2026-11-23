@@ -22,6 +22,9 @@ inside the folder of the manuscript you are writing.
   Mendeley import that leaves your PDFs where they are.
 - **Several devices** (PCs and an Android app) share one library through any synchronised folder — Dropbox,
   Google Drive, OneDrive, Qsync, Syncthing — using per-device change journals instead of a shared database.
+- **Share a project as a ZIP.** Right-click a project › *Export PDFs as ZIP…* writes one archive with its PDFs,
+  each named after its citation key, plus the project's `.bib` (optionally supplementary files and sub-projects),
+  ready to send to colleagues. The library itself is not touched.
 - **Manuscript check.** A project whose `.bib` is also written next to a manuscript compares the keys its `.tex`
   files cite with the project: cited but missing (one click adds those the library has), and never cited.
 - **Ask AI** about a paper in Study mode, with your own API key (OpenAI, Anthropic, Google) or a local model (Ollama).

@@ -63,6 +63,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -74,6 +75,7 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME, APP_SUBTITLE
 from ..core.config import user_config_path
+from ..core.export import ZipOptions, ZipPlan, ZipReport
 from ..core.extractor import pdf_outline
 from ..core.inbox import InboxWatcher
 from ..core.library import DuplicateDoiError, ForeignBibFileError, IngestResult, IngestStatus, Library, LibraryError
@@ -89,10 +91,12 @@ from .dialogs import (
     MendeleyImportDialog,
     PreferencesDialog,
     ViewSettingsDialog,
+    ZipExportDialog,
     confirm_naming_rule,
     show_about,
     show_attach_report,
     show_import_report,
+    show_zip_report,
 )
 from .filters import FilterBar, ViewHeader
 from .inspector import ReferenceSheet
@@ -120,6 +124,7 @@ from .workers import (
     ImportController,
     MendeleyImportController,
     TaskRunner,
+    ZipExportController,
     expand_pdf_paths,
 )
 
@@ -336,6 +341,8 @@ class MainWindow(QMainWindow):
         self.mendeley = MendeleyImportController(library, self.runner, self)
         self.attacher = AttachController(library, self.runner, self)
         self._attach_search = False
+        self.zip_exporter = ZipExportController(self.runner, self)
+        self._zip_job: tuple[ZipPlan, QProgressDialog] | None = None
         self.inbox_bridge = InboxBridge(self)
         self.inbox: InboxWatcher | None = None
         self._watch_inbox = watch_inbox
@@ -418,6 +425,8 @@ class MainWindow(QMainWindow):
                                 tip="Create a project: a collection with its own .bib file")  # fmt: skip
         self.act_remove_folder = a("Remove Project...", self.remove_folder,
                                    tip="Remove the selected project (its references stay in the library)")  # fmt: skip
+        self.act_export_zip = a("Export Project PDFs as ZIP...", self.export_project_zip,
+                                tip="A ZIP file with the PDFs of the selected project, for colleagues")  # fmt: skip
         self.act_sync = a("Rewrite .bib Files", self.sync_bibs, shortcut="F5",
                           tip="Rewrite the .bib file of every project and master.bib (F5)")  # fmt: skip
         self.act_help = a("Shortcuts && About", self.show_help, shortcut="F1", tip="Help: shortcuts and about")
@@ -478,7 +487,8 @@ class MainWindow(QMainWindow):
         bar = self.menuBar()
         file_menu = bar.addMenu("&File")
         for item in (self.act_add_files, self.act_add_folder, self.act_import_mendeley, None, self.act_new_folder,
-                     None, self.act_open, self.act_show_in_folder, None, self.act_quit):  # fmt: skip
+                     self.act_export_zip, None, self.act_open, self.act_show_in_folder, None,
+                     self.act_quit):  # fmt: skip
             file_menu.addSeparator() if item is None else file_menu.addAction(item)
         edit_menu = bar.addMenu("&Edit")
         for item in (self.act_copy_cite, self.act_copy_bibtex, None, self.act_select_all, self.act_command,
@@ -508,11 +518,11 @@ class MainWindow(QMainWindow):
         """Actions offered by the command palette (search box text starting with ">")."""
         return [
             self.act_add_files, self.act_add_folder, self.act_import_mendeley, self.act_new_folder,
-            self.act_copy_cite, self.act_copy_bibtex, self.act_open, self.act_show_in_folder, self.act_lookup,
-            self.act_verify, self.act_study, self.act_attach_pdf, self.act_add_supplements, self.act_sync,
-            self.act_find_pdfs, self.act_apply_naming, self.act_share, self.act_sync_devices, self.act_save_search,
-            self.act_view_rows, self.act_view_table, self.act_edit_settings, self.act_open_library,
-            self.act_open_bib_dir, self.act_open_inbox, self.act_preferences, self.act_help,
+            self.act_export_zip, self.act_copy_cite, self.act_copy_bibtex, self.act_open, self.act_show_in_folder,
+            self.act_lookup, self.act_verify, self.act_study, self.act_attach_pdf, self.act_add_supplements,
+            self.act_sync, self.act_find_pdfs, self.act_apply_naming, self.act_share, self.act_sync_devices,
+            self.act_save_search, self.act_view_rows, self.act_view_table, self.act_edit_settings,
+            self.act_open_library, self.act_open_bib_dir, self.act_open_inbox, self.act_preferences, self.act_help,
         ]  # fmt: skip
 
     @staticmethod
@@ -766,6 +776,9 @@ class MainWindow(QMainWindow):
         self.attacher.progress.connect(self._on_import_progress)
         self.attacher.attached.connect(self._on_pdf_attached)
         self.attacher.finished.connect(self._on_attach_finished)
+        self.zip_exporter.progress.connect(self._on_zip_progress)
+        self.zip_exporter.finished.connect(self._on_zip_finished)
+        self.zip_exporter.failed.connect(self._on_zip_failed)
         for signal in (
             self.proxy.modelReset,
             self.proxy.rowsInserted,
@@ -921,6 +934,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.pool.clear()
+        self.zip_exporter.cancel()  # the partial archive is deleted by the worker
         self.stop_inbox()
         self._device_timer.stop()
         try:
@@ -1721,6 +1735,81 @@ class MainWindow(QMainWindow):
             return
         self.notify(f"'{collection.name}' now also writes {path}" if path else "External .bib target removed")
 
+    # ================================================================== sharing a project as a ZIP
+    def _zip_options(self) -> ZipOptions:
+        def flag(name: str, default: bool) -> bool:
+            value = self.settings.value(f"zipExport/{name}", default)
+            return value if isinstance(value, bool) else str(value).lower() == "true"
+
+        return ZipOptions(
+            include_bib=flag("includeBib", True),
+            include_supplements=flag("includeSupplements", False),
+            include_subprojects=flag("includeSubprojects", False),
+        )
+
+    def export_project_zip(self, collection_id: int | None = None) -> None:
+        """Right-click on a project > Export PDFs as ZIP (``core/export.py``): options, file name, then the archive is
+        written in the pool behind a progress dialog that can cancel it."""
+        cid = collection_id if collection_id is not None else self._target_folder()
+        if cid is None:
+            self.notify("Select a project to export its PDFs")
+            return
+        if self.zip_exporter.running:
+            self.notify("A ZIP export is already running")
+            return
+        dialog = ZipExportDialog(self, planner=partial(self.library.plan_project_zip, cid), options=self._zip_options())
+        if dialog.exec() != ZipExportDialog.DialogCode.Accepted:
+            return
+        options, plan = dialog.options(), dialog.plan()
+        self.settings.setValue("zipExport/includeBib", options.include_bib)
+        self.settings.setValue("zipExport/includeSupplements", options.include_supplements)
+        self.settings.setValue("zipExport/includeSubprojects", options.include_subprojects)
+        start = Path(str(self.settings.value("zipExport/lastDir", str(Path.home())))) / plan.default_filename
+        path, _ = QFileDialog.getSaveFileName(self, "Export PDFs as ZIP", str(start), "ZIP archives (*.zip)")
+        if not path:
+            return
+        target = Path(path if path.lower().endswith(".zip") else path + ".zip")
+        self.settings.setValue("zipExport/lastDir", str(target.parent))
+        progress = QProgressDialog(f"Writing {target.name}...", "Cancel", 0, 1000, self)
+        progress.setWindowTitle("Export PDFs as ZIP")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(400)  # small projects finish before it appears
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.canceled.connect(self.zip_exporter.cancel)
+        self._zip_job = (plan, progress)
+        self.zip_exporter.start(plan, target)
+        self.notify(f"Exporting {plan.pdfs + plan.supplements} file(s) to {target.name}...")
+
+    def _close_zip_progress(self) -> ZipPlan | None:
+        job, self._zip_job = self._zip_job, None
+        if job is None:
+            return None
+        plan, progress = job
+        progress.canceled.disconnect(self.zip_exporter.cancel)
+        progress.reset()  # also stops the timer that would show it after the minimum duration
+        progress.close()
+        progress.deleteLater()
+        return plan
+
+    def _on_zip_progress(self, done: int, total: int) -> None:
+        if self._zip_job is not None and not self._zip_job[1].wasCanceled():
+            self._zip_job[1].setValue(int(1000 * done / max(total, 1)))
+
+    def _on_zip_finished(self, report: ZipReport) -> None:
+        plan = self._close_zip_progress()
+        if report.cancelled:
+            self.notify("ZIP export cancelled")
+            return
+        self.notify(f"Exported {report.pdfs + report.supplements} file(s) to {report.target}")
+        if plan is not None and self.isVisible() and show_zip_report(self, plan, report):
+            self._reveal(report.target)
+
+    def _on_zip_failed(self, message: str) -> None:
+        self._close_zip_progress()
+        self.notify("ZIP export failed")
+        QMessageBox.warning(self, "Export PDFs as ZIP", f"The ZIP file could not be written.\n\n{message}")
+
     # ================================================================== drag & drop and imports
     def _on_tree_drop(self, mime: Any, kind: NodeKind, collection_id: int | None) -> bool:
         ids = paper_ids_from_mime(mime)
@@ -2195,7 +2284,12 @@ class MainWindow(QMainWindow):
         self.search.setFocus()
 
     def _tree_menu(self, pos: QPoint) -> None:
-        node = self.tree.node_at(pos)
+        menu = self.tree_menu_for(self.tree.node_at(pos))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+        menu.deleteLater()
+
+    def tree_menu_for(self, node: Node | None) -> QMenu:
+        """The shelf's context menu for ``node`` (a project, a saved search, or anything else)."""
         menu = QMenu(self)
         if node is not None and node[0] == NodeKind.FOLDER and node[1] is not None:
             cid = node[1]
@@ -2204,6 +2298,8 @@ class MainWindow(QMainWindow):
             self._menu_action(menu, "Rename Project",
                               lambda: self.tree.edit(self.tree.find_index(NodeKind.FOLDER, cid)))  # fmt: skip
             self._menu_action(menu, "Remove Project...", lambda: self.remove_folder(cid), icons.folder_remove())
+            menu.addSeparator()
+            self._menu_action(menu, "Export PDFs as ZIP...", lambda: self.export_project_zip(cid))
             menu.addSeparator()
             self._menu_action(menu, "Project Settings...", lambda: self.edit_view_settings(node))
             if collection is not None:
@@ -2221,7 +2317,7 @@ class MainWindow(QMainWindow):
                 self._menu_action(menu, "Rewrite .bib Files", self.sync_bibs, icons.sync())
             if node is not None and node[0] == NodeKind.INBOX:
                 menu.addAction(self.act_open_inbox)
-        menu.exec(self.tree.viewport().mapToGlobal(pos))
+        return menu
 
     def _fill_columns_menu(self, menu: QMenu) -> None:
         menu.clear()

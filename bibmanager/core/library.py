@@ -22,16 +22,25 @@ import sqlite3
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from . import sync as device_sync
-from .bibtex_manager import BIBTEX_DIRNAME, MASTER_SLUG, BibtexManager, is_generated_bib, render_entry, slugify
+from .bibtex_manager import (
+    BIBTEX_DIRNAME,
+    GENERATED_MARKER,
+    MASTER_SLUG,
+    BibtexManager,
+    is_generated_bib,
+    render_entry,
+    slugify,
+)
 from .config import AppConfig
 from .database import Database
+from .export import ZipMember, ZipOptions, ZipPlan, file_size, unique_arcname
 from .extractor import MetadataResolver, PdfContent, PdfReadError, clean_doi, read_pdf
 from .models import (
     Attachment,
@@ -1311,6 +1320,71 @@ class Library:
         result = IngestResult(IngestStatus.IMPORTED, self.get_paper(paper_id), None, candidate.log)
         result.supplements = supplements
         return result
+
+    # ================================================================== sharing a project
+    def plan_project_zip(self, collection_id: int, options: ZipOptions | None = None) -> ZipPlan:
+        """The files of a project for a ZIP to send to colleagues (``core/export.py``; reads SQLite: GUI thread).
+
+        Main PDFs, managed or linked, are named ``<key>.pdf``; with ``include_supplements`` the supplementary files
+        follow as ``<key>_S<n>.<ext>``; with ``include_subprojects`` the references of the nested sub-projects are
+        added (each once). References without a PDF, or whose files are not on this device, are listed in the plan,
+        never fatal. Nothing in the library is changed.
+        """
+        options = options or ZipOptions()
+        collection = self._require_collection(collection_id)
+        sub_ids = [cid for cid in self.db.descendant_collection_ids(collection_id) if cid != collection_id]
+        papers: dict[int, Paper] = {}
+        for cid in [collection_id, *sub_ids] if options.include_subprojects else [collection_id]:
+            for paper in self.db.papers_in_collection(cid):
+                papers.setdefault(paper.id, paper)
+        ordered = sorted(papers.values(), key=lambda p: p.citation_key.casefold())
+        plan = ZipPlan(name=collection.name, folder=collection.slug, references=len(ordered), subprojects=len(sub_ids))
+        taken: set[str] = {plan.bib_arcname.casefold()}
+        seen: set[str] = set()
+
+        def add(source: Path, name: str, key: str, size: int, *, supplement: bool = False) -> None:
+            identity = os.path.normcase(os.path.abspath(source))
+            if identity in seen:  # the same file recorded twice: one copy is enough
+                return
+            seen.add(identity)
+            arcname = unique_arcname(taken, f"{plan.folder}/{name}")
+            plan.members.append(ZipMember(source, arcname, key, size, supplement))
+
+        for paper in ordered:
+            key, stem = paper.citation_key, self._file_stem(paper.citation_key)
+            path = self.pdf_path(paper)
+            size = file_size(path) if path is not None else None
+            if path is None:
+                plan.without_pdf.append(key)
+            elif size is None:
+                plan.unavailable.append(key)
+            else:
+                add(path, f"{stem}.pdf", key, size)
+            if not paper.attachments:
+                continue
+            for number, attachment in enumerate(self.attachments(paper.id), start=1):
+                source = self.attachment_path(attachment)
+                size = file_size(source)
+                if size is None:
+                    if options.include_supplements:
+                        plan.unavailable.append(f"{key} ({attachment.label or source.name})")
+                    continue
+                plan.supplements_found += 1
+                plan.supplements_bytes += size
+                if options.include_supplements:
+                    add(source, f"{stem}_S{number}{source.suffix.lower()}", key, size, supplement=True)
+        if options.include_bib:
+            entries = [
+                render_entry(p, self.bib.protected_words, include_abstract=self.bib.include_abstract)
+                for p in sorted(ordered, key=lambda p: p.citation_key)
+            ]
+            header = (
+                f'{GENERATED_MARKER} -- project "{collection.name}" ({len(entries)} entries), '
+                f"exported on {date.today().isoformat()}.\n"
+                "% The PDFs next to this file are named after the citation keys.\n"
+            )
+            plan.bib_text = header + ("\n" + "\n\n".join(entries) + "\n" if entries else "")
+        return plan
 
     # ================================================================== BibTeX sync
     def _write_collection(self, collection: Collection) -> list[Path]:

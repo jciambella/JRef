@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QObject, QRunnable, QThreadPool, Signal, Slot
 
+from ..core.export import ZipPlan, write_zip
 from ..core.inbox import move_aside
 from ..core.library import AttachmentCandidate, IngestResult, IngestStatus, Library, ReferenceCandidate
 from ..core.mendeley import (
@@ -440,3 +442,62 @@ def expand_pdf_paths(paths: Iterable[str | Path]) -> list[Path]:
         elif path.is_file() and path.suffix.lower() == ".pdf":
             found.append(path)
     return list(dict.fromkeys(found))
+
+
+class ZipExportController(QObject):
+    """Right-click on a project > Export PDFs as ZIP: the plan is made on the GUI thread
+    (``Library.plan_project_zip``), the archive is written in the pool (``core.export.write_zip``, file I/O only).
+
+    ``progress`` is emitted from the worker thread and reaches bound slots on the GUI thread through Qt's queued
+    connection; it carries Python ints because an archive can be larger than 2 GB.
+    """
+
+    progress = Signal(object, object)  # bytes done, bytes in total
+    finished = Signal(object)  # ZipReport (``cancelled`` set if the user cancelled)
+    failed = Signal(str)
+
+    PROGRESS_INTERVAL_S = 0.1
+
+    def __init__(self, runner: TaskRunner, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.runner = runner
+        self._cancel: threading.Event | None = None
+        self._last_report = 0.0
+
+    @property
+    def running(self) -> bool:
+        return self._cancel is not None
+
+    def start(self, plan: ZipPlan, target: Path) -> None:
+        if self.running:
+            raise RuntimeError("A ZIP export is already running")
+        self._cancel = threading.Event()
+        self._last_report = 0.0
+        self.runner.submit(
+            write_zip,
+            plan,
+            target,
+            progress=self._report_progress,
+            cancel=self._cancel,
+            on_done=self._on_done,
+            on_error=self._on_failed,
+        )
+
+    def cancel(self) -> None:
+        if self._cancel is not None:
+            self._cancel.set()
+
+    def _report_progress(self, done: int, total: int) -> None:  # worker thread
+        now = time.monotonic()
+        if done < total and now - self._last_report < self.PROGRESS_INTERVAL_S:
+            return
+        self._last_report = now
+        self.progress.emit(done, total)
+
+    def _on_done(self, report: Any) -> None:
+        self._cancel = None
+        self.finished.emit(report)
+
+    def _on_failed(self, message: str) -> None:
+        self._cancel = None
+        self.failed.emit(message)

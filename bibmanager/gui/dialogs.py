@@ -1,9 +1,11 @@
-"""Dialogs: view settings, Preferences / first-run welcome, Mendeley import, naming rule, About."""
+"""Dialogs: view settings, Preferences / first-run welcome, Mendeley import, naming rule, ZIP export, About."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from .. import APP_AUTHOR, APP_AUTHOR_EMAIL, APP_NAME, APP_SUBTITLE, __version__
 from ..core.config import DEFAULT_CONTACT_EMAIL, AppConfig
+from ..core.export import ZipOptions, ZipPlan, ZipReport, format_size
 from ..core.mendeley import (
     BibFileSummary,
     MendeleyImportOptions,
@@ -631,6 +634,126 @@ class FindPdfsDialog(QDialog):
 
     def values(self) -> tuple[Path, str]:
         return Path(self.folder.text().strip()), str(self.mode.currentData())
+
+
+class ZipExportDialog(QDialog):
+    """Right-click on a project > Export PDFs as ZIP: what goes into the archive (``core/export.py``).
+
+    ``planner`` is ``Library.plan_project_zip`` bound to the project; it is called again whenever an option changes so
+    the counts and the size are always those of the archive that will be written.
+    """
+
+    def __init__(
+        self, parent: QWidget | None, *, planner: Callable[[ZipOptions], ZipPlan], options: ZipOptions
+    ) -> None:
+        super().__init__(parent)
+        self._planner = planner
+        self._plan = planner(options)
+        self.setWindowTitle(f"Export PDFs — {self._plan.name}")
+        self.setWindowIcon(icons.app_icon())
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(10)
+        intro = QLabel(
+            f"One ZIP file with the PDFs of <b>{escape(self._plan.name)}</b>, each named after its citation key, "
+            "ready to send to colleagues. Your library is not changed."
+        )
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(intro)
+        self.bib = QCheckBox(f"Include {self._plan.folder}.bib (the BibTeX entries, with the same keys)")
+        self.bib.setChecked(options.include_bib)
+        self.supplements = QCheckBox()
+        self.supplements.setChecked(options.include_supplements)
+        self.subprojects = QCheckBox()
+        self.subprojects.setChecked(options.include_subprojects and self._plan.subprojects > 0)
+        self.subprojects.setVisible(self._plan.subprojects > 0)
+        for box in (self.bib, self.supplements, self.subprojects):
+            layout.addWidget(box)
+            box.toggled.connect(self._refresh)
+        self.summary = QLabel()
+        self.summary.setObjectName("zipSummary")
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(self.summary)
+        buttons = _buttons("Export...")
+        self.export_button = next(b for b in buttons.buttons() if b.objectName() == "primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._refresh(replan=False)
+
+    def options(self) -> ZipOptions:
+        return ZipOptions(
+            include_bib=self.bib.isChecked(),
+            include_supplements=self.supplements.isChecked(),
+            include_subprojects=self.subprojects.isChecked(),
+        )
+
+    def plan(self) -> ZipPlan:
+        return self._plan
+
+    def _refresh(self, *_args: Any, replan: bool = True) -> None:
+        if replan:
+            self._plan = self._planner(self.options())
+        plan = self._plan
+        n = plan.subprojects
+        self.subprojects.setText(f"Include the references of its {n} sub-project{'s' if n != 1 else ''}")
+        found = plan.supplements_found
+        self.supplements.setEnabled(found > 0 or self.supplements.isChecked())
+        self.supplements.setText(
+            f"Include supplementary files ({found} file{'s' if found != 1 else ''}, "
+            f"{format_size(plan.supplements_bytes)})"
+            if found
+            else "Include supplementary files (none on this device)"
+        )
+        files = plan.pdfs + plan.supplements
+        lines = [
+            f"<b>{plan.pdfs} PDF{'s' if plan.pdfs != 1 else ''}</b>"
+            + (f" + {plan.supplements} supplementary file{'s' if plan.supplements != 1 else ''}" if plan.supplements
+               else "")
+            + f" from {plan.references} reference{'s' if plan.references != 1 else ''}"
+            + f" · about {format_size(plan.total_bytes)}"
+        ]  # fmt: skip
+        if plan.missing:
+            m = len(plan.missing)
+            lines.append(
+                f"{m} {'item is' if m == 1 else 'items are'} not included (no PDF, or the file is not on this "
+                "device); the list is shown after the export."
+            )
+        if not files:
+            lines.append("There is nothing to export: none of these references has a PDF on this device.")
+        self.summary.setText("<br>".join(lines))
+        self.export_button.setEnabled(files > 0)
+
+
+def show_zip_report(parent: QWidget | None, plan: ZipPlan, report: ZipReport) -> bool:
+    """Summary after a ZIP export; True if the user asked to see the archive in its folder."""
+    parts = [f"{report.pdfs} PDF{'s' if report.pdfs != 1 else ''}"]
+    if report.supplements:
+        parts.append(f"{report.supplements} supplementary file{'s' if report.supplements != 1 else ''}")
+    if report.bib:
+        parts.append(plan.bib_arcname.rpartition("/")[2])
+    text = (
+        f"Exported {', '.join(parts[:-1]) + ' and ' + parts[-1] if len(parts) > 1 else parts[0]} to "
+        f"{report.target.name} ({format_size(report.size)})."
+    )
+    details: list[str] = []
+    not_included = [*plan.missing, *(f"{s} (could not be read)" for s in report.skipped)]
+    if not_included:
+        text += f"\n\n{len(not_included)} item(s) could not be included (see details)."
+        details = ["Not included:", *not_included]
+    box = QMessageBox(parent)
+    box.setWindowTitle("Export PDFs as ZIP")
+    box.setIcon(QMessageBox.Icon.Warning if report.skipped else QMessageBox.Icon.Information)
+    box.setText(text)
+    if details:
+        box.setDetailedText("\n".join(details))
+    reveal = box.addButton("Show in Folder", QMessageBox.ButtonRole.ActionRole)
+    box.addButton(QMessageBox.StandardButton.Ok)
+    box.exec()
+    return box.clickedButton() is reveal
 
 
 def show_attach_report(parent: QWidget | None, report: AttachReport, *, search: bool) -> None:
